@@ -12,11 +12,14 @@ from __future__ import annotations
 
 import ast
 import base64
+import copy
 import json
 import logging
 import os
+import threading
 import time
 from collections import defaultdict, deque
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
@@ -30,8 +33,13 @@ except Exception:  # pragma: no cover - fallback when package missing during imp
     genai = None  # type: ignore
     GoogleAPIError = Exception  # type: ignore
 
+try:  # pragma: no cover - training metrics degrade gracefully without GPUs
+    import pynvml  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    pynvml = None  # type: ignore
+
 main
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import Body, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -142,6 +150,211 @@ def _normalise_error(detail: Any) -> tuple[str, Optional[Dict[str, Any]]]:
             combined_details = None
 
     return message, combined_details
+
+
+# ---------------------------------------------------------------------------
+# Training job management
+# ---------------------------------------------------------------------------
+
+
+def _current_timestamp() -> str:
+    return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+
+_GPU_LOCK = threading.Lock()
+_GPU_INITIALISED = False
+
+
+def _read_gpu_memory() -> Optional[int]:  # pragma: no cover - depends on GPU availability
+    if pynvml is None:
+        return None
+
+    global _GPU_INITIALISED  # pylint: disable=global-statement
+    try:
+        with _GPU_LOCK:
+            if not _GPU_INITIALISED:
+                pynvml.nvmlInit()
+                _GPU_INITIALISED = True
+            handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+            info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+    except Exception:
+        return None
+    return int(getattr(info, "used", 0))
+
+
+class TrainingJob:
+    """Represents a background training job that tracks progress and metrics."""
+
+    def __init__(self, run_id: str, *, steps: int = 20, description: Optional[str] = None) -> None:
+        self.run_id = run_id
+        self.steps = max(1, steps)
+        self.description = description or "Synthetic training job"
+        self.log_path = LOGS_DIR / f"{run_id}.log"
+        self._logger = logging.getLogger(f"{LOGGER.name}.train.{run_id}")
+        self._logger.setLevel(logging.INFO)
+        self._stop_event = threading.Event()
+        self._lock = threading.Lock()
+        self._thread = threading.Thread(target=self._run, name=f"training-{run_id}", daemon=True)
+        self._handler: Optional[logging.Handler] = None
+
+        now = _current_timestamp()
+        self._snapshot: Dict[str, Any] = {
+            "runId": self.run_id,
+            "state": "pending",
+            "progress": 0.0,
+            "message": "Pending",
+            "description": self.description,
+            "startedAt": now,
+            "updatedAt": now,
+            "metrics": {
+                "progressPercent": 0.0,
+                "gpuMemoryBytes": _read_gpu_memory(),
+                "logTail": "",
+            },
+        }
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+    def start(self) -> None:
+        self._thread.start()
+
+    def abort(self) -> None:
+        self._stop_event.set()
+
+    def snapshot(self) -> Dict[str, Any]:
+        with self._lock:
+            return copy.deepcopy(self._snapshot)
+
+    def is_finished(self) -> bool:
+        with self._lock:
+            return self._snapshot["state"] in {"completed", "failed", "aborted"}
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+    def _run(self) -> None:
+        handler = logging.FileHandler(self.log_path)
+        handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+        self._handler = handler
+        self._logger.addHandler(handler)
+
+        self._update_snapshot(state="running", message="Training started", progress=0.0)
+        try:
+            for step in range(self.steps):
+                if self._stop_event.is_set():
+                    self._update_snapshot(state="aborted", message="Training aborted", progress=self._progress_percent(step))
+                    self._logger.info("Run %s aborted at step %s/%s", self.run_id, step, self.steps)
+                    return
+
+                time.sleep(0.5)
+                step_number = step + 1
+                progress = self._progress_percent(step_number)
+                self._logger.info("Run %s completed step %s/%s", self.run_id, step_number, self.steps)
+                self._update_snapshot(
+                    message=f"Completed step {step_number} of {self.steps}",
+                    progress=progress,
+                )
+
+            self._update_snapshot(state="completed", message="Training completed", progress=100.0)
+        except Exception as exc:  # pragma: no cover - unexpected runtime errors
+            self._logger.exception("Run %s failed: %s", self.run_id, exc)
+            self._update_snapshot(state="failed", message=f"Training failed: {exc}")
+        finally:
+            if self._handler:
+                self._logger.removeHandler(self._handler)
+                self._handler.flush()
+                self._handler.close()
+                self._handler = None
+            self._update_snapshot(force_log_refresh=True)
+
+    def _progress_percent(self, step: int) -> float:
+        if self.steps == 0:
+            return 0.0
+        return round(100.0 * min(step, self.steps) / self.steps, 2)
+
+    def _update_snapshot(
+        self,
+        *,
+        state: Optional[str] = None,
+        message: Optional[str] = None,
+        progress: Optional[float] = None,
+        force_log_refresh: bool = False,
+    ) -> None:
+        with self._lock:
+            if state is not None:
+                self._snapshot["state"] = state
+            if message is not None:
+                self._snapshot["message"] = message
+            if progress is not None:
+                self._snapshot["progress"] = max(0.0, min(100.0, progress))
+                self._snapshot["metrics"]["progressPercent"] = self._snapshot["progress"]
+
+            self._snapshot["updatedAt"] = _current_timestamp()
+            self._snapshot["metrics"]["gpuMemoryBytes"] = _read_gpu_memory()
+            if force_log_refresh or self._snapshot["metrics"].get("logTail") == "":
+                self._snapshot["metrics"]["logTail"] = self._read_log_tail()
+
+    def _read_log_tail(self, max_lines: int = 20) -> str:
+        try:
+            with self.log_path.open("r", encoding="utf-8", errors="ignore") as log_file:
+                lines = log_file.readlines()[-max_lines:]
+        except FileNotFoundError:
+            return ""
+        return "".join(lines).strip()
+
+
+class TrainingJobManager:
+    """Simple in-memory registry for background training jobs."""
+
+    def __init__(self) -> None:
+        self._jobs: Dict[str, TrainingJob] = {}
+        self._lock = threading.Lock()
+
+    def start_job(self, *, steps: int = 20, description: Optional[str] = None) -> str:
+        run_id = str(uuid4())
+        job = TrainingJob(run_id, steps=steps, description=description)
+        with self._lock:
+            self._jobs[run_id] = job
+        job.start()
+        return run_id
+
+    def get_snapshot(self, run_id: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            job = self._jobs.get(run_id)
+        if job is None:
+            return None
+        snapshot = job.snapshot()
+        if job.is_finished():
+            snapshot = self._ensure_log_tail(snapshot)
+        return snapshot
+
+    def abort_job(self, run_id: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            job = self._jobs.get(run_id)
+        if job is None:
+            return None
+        job.abort()
+        return job.snapshot()
+
+    def _ensure_log_tail(self, snapshot: Dict[str, Any]) -> Dict[str, Any]:
+        metrics = snapshot.setdefault("metrics", {})
+        if metrics.get("logTail"):
+            return snapshot
+        run_id = snapshot.get("runId")
+        if not run_id:
+            return snapshot
+        log_path = LOGS_DIR / f"{run_id}.log"
+        try:
+            with log_path.open("r", encoding="utf-8", errors="ignore") as log_file:
+                lines = log_file.readlines()[-20:]
+                metrics["logTail"] = "".join(lines).strip()
+        except FileNotFoundError:
+            metrics.setdefault("logTail", "")
+        return snapshot
+
+
+TRAINING_MANAGER = TrainingJobManager()
 
 
 # ---------------------------------------------------------------------------
@@ -315,6 +528,30 @@ class WorkflowRunNode(BaseModel):
 class WorkflowRunResponse(BaseModel):
     run_id: str
     nodes: List[WorkflowRunNode]
+
+
+class TrainStartRequest(BaseModel):
+    steps: int = Field(20, ge=1, le=10_000)
+    description: Optional[str] = None
+
+
+class TrainStartResponse(BaseModel):
+    runId: str
+
+
+class TrainStatusResponse(BaseModel):
+    runId: str
+    state: str
+    progress: float
+    message: str
+    description: Optional[str] = None
+    startedAt: str
+    updatedAt: str
+    metrics: Dict[str, Any]
+
+
+class TrainAbortRequest(BaseModel):
+    runId: str
 
 
 # ---------------------------------------------------------------------------
@@ -1015,3 +1252,45 @@ def run_workflow(definition: WorkflowDefinition) -> WorkflowRunResponse:
         run_logger.info("Run %s finished", run_id)
         run_logger.removeHandler(handler)
         handler.close()
+
+
+# ---------------------------------------------------------------------------
+# Training endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/v1/train/start", response_model=TrainStartResponse)
+def start_training_job(payload: TrainStartRequest = Body(default=TrainStartRequest())) -> TrainStartResponse:
+    run_id = TRAINING_MANAGER.start_job(steps=payload.steps, description=payload.description)
+    LOGGER.info("Started training run %s", run_id)
+    return TrainStartResponse(runId=run_id)
+
+
+@app.get("/api/v1/train/status", response_model=TrainStatusResponse)
+def get_training_status(run_id: str) -> TrainStatusResponse:
+    snapshot = TRAINING_MANAGER.get_snapshot(run_id)
+    if snapshot is None:
+        raise HTTPException(
+            status_code=404,
+            detail=_error_detail(
+                "Training run not found.",
+                error_code="TRAINING_RUN_NOT_FOUND",
+                details={"runId": run_id},
+            ),
+        )
+    return TrainStatusResponse(**snapshot)
+
+
+@app.post("/api/v1/train/abort", response_model=TrainStatusResponse)
+def abort_training_job(payload: TrainAbortRequest) -> TrainStatusResponse:
+    snapshot = TRAINING_MANAGER.abort_job(payload.runId)
+    if snapshot is None:
+        raise HTTPException(
+            status_code=404,
+            detail=_error_detail(
+                "Training run not found.",
+                error_code="TRAINING_RUN_NOT_FOUND",
+                details={"runId": payload.runId},
+            ),
+        )
+    return TrainStatusResponse(**snapshot)
