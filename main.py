@@ -44,6 +44,7 @@ PREVIEW_LIMIT_BYTES = 1 * 1024 * 1024
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
 TEXT_EXTENSIONS = {".txt", ".md", ".json", ".csv"}
+ALLOWED_EXTENSIONS = IMAGE_EXTENSIONS | TEXT_EXTENSIONS
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -217,7 +218,13 @@ async def upload_dataset(file: UploadFile = File(...)) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail="File exceeds maximum allowed size of 20MB")
 
     dataset_id = str(uuid4())
-    extension = Path(file.filename).suffix
+    extension = Path(file.filename).suffix.lower()
+    if extension not in ALLOWED_EXTENSIONS:
+        allowed = ", ".join(sorted(ALLOWED_EXTENSIONS))
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type. Allowed extensions: {allowed}",
+        )
     stored_name = f"{dataset_id}{extension}"
     stored_path = DATASETS_DIR / stored_name
     stored_path.write_bytes(content)
@@ -231,6 +238,7 @@ async def upload_dataset(file: UploadFile = File(...)) -> Dict[str, Any]:
         "id": dataset_id,
         "name": file.filename,
         "filename": stored_name,
+        "path": str(Path("datasets") / stored_name),
         "size": size_bytes,
         "type": _detect_dataset_type(file.filename),
         "mimeType": _detect_mime_type(extension),
