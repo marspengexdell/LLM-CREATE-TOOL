@@ -64,6 +64,14 @@ const ModelHubConfigurator = ({ onSelectModel }) => {
     const [isLoading, setIsLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
 
+codex/add-empty-state-handling-for-various-components
+    const fetchModels = useCallback(async () => {
+        try {
+            setIsLoading(true);
+            const response = await fetch('/api/v1/models');
+            if (!response.ok) {
+                throw new Error('Network response was not ok');
+
     useEffect(() => {
         const fetchModels = async () => {
             try {
@@ -78,10 +86,21 @@ const ModelHubConfigurator = ({ onSelectModel }) => {
                 handleApiError(error, DEFAULT_ERROR_MESSAGE, 'Failed to fetch models');
             } finally {
                 setIsLoading(false);
+main
             }
-        };
-        fetchModels();
+            const data = await response.json();
+            setModels(data);
+        } catch (error) {
+            console.error("Failed to fetch models:", error);
+            alert("Could not fetch models from the server.");
+        } finally {
+            setIsLoading(false);
+        }
     }, []);
+
+    useEffect(() => {
+        fetchModels();
+    }, [fetchModels]);
 
     const filteredModels = models.filter(m => m.name.toLowerCase().includes(searchTerm.toLowerCase()));
 
@@ -95,15 +114,27 @@ const ModelHubConfigurator = ({ onSelectModel }) => {
                 onChange={e => setSearchTerm(e.target.value)}
             />
             <div className="item-list">
-                {isLoading ? <p>Loading models...</p> : filteredModels.map(model => (
-                    <div key={model.id} className="model-item item-card">
-                        <div className="item-info">
-                            <h4>{model.name}</h4>
-                            <p>{model.description}</p>
+                {isLoading ? (
+                    <p>Loading models...</p>
+                ) : filteredModels.length === 0 ? (
+                    <div className="empty-state">
+                        <h4>No models available</h4>
+                        <p>Try refreshing to see the latest models.</p>
+                        <div className="empty-state-actions">
+                            <button onClick={fetchModels} className="select-item-btn">Retry</button>
                         </div>
-                        <button onClick={() => onSelectModel(model.id)} className="select-item-btn">Select</button>
                     </div>
-                ))}
+                ) : (
+                    filteredModels.map(model => (
+                        <div key={model.id} className="model-item item-card">
+                            <div className="item-info">
+                                <h4>{model.name}</h4>
+                                <p>{model.description}</p>
+                            </div>
+                            <button onClick={() => onSelectModel(model.id)} className="select-item-btn">Select</button>
+                        </div>
+                    ))
+                )}
             </div>
         </div>
     );
@@ -112,6 +143,7 @@ const ModelHubConfigurator = ({ onSelectModel }) => {
 const DataHubConfigurator = ({ onSelectDataset }) => {
     const [datasets, setDatasets] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
+    const fileInputRef = useRef(null);
 
     const fetchDatasets = async () => {
         try {
@@ -152,38 +184,77 @@ const DataHubConfigurator = ({ onSelectDataset }) => {
         }
     };
 
+    const handleUploadAction = () => {
+        fileInputRef.current?.click();
+    };
+
     return (
         <div className="configurator-container">
             <div className="upload-area">
                 <h4>Upload New Dataset</h4>
-                <label className="upload-btn-large">
+                <label className="upload-btn-large" onClick={handleUploadAction}>
                     Click to select or drag and drop a file
-                    <input type="file" onChange={handleFileUpload} style={{ display: 'none' }} />
+                    <input
+                        ref={fileInputRef}
+                        type="file"
+                        onChange={handleFileUpload}
+                        style={{ display: 'none' }}
+                    />
                 </label>
             </div>
              <div className="item-list">
-                {isLoading ? <p>Loading datasets...</p> : datasets.map(dataset => (
-                    <div key={dataset.id} className="dataset-item item-card">
-                        <div className="dataset-preview">
-                            {dataset.type === 'image' && <img src={dataset.preview} alt={dataset.name} />}
+                {isLoading ? (
+                    <p>Loading datasets...</p>
+                ) : datasets.length === 0 ? (
+                    <div className="empty-state">
+                        <h4>No datasets available</h4>
+                        <p>Upload a new dataset or try fetching again.</p>
+                        <div className="empty-state-actions">
+                            <button onClick={fetchDatasets} className="select-item-btn">Retry</button>
+                            <button onClick={handleUploadAction} className="configure-btn">Upload dataset</button>
                         </div>
-                        <div className="item-info">
-                            <h4>{dataset.name}</h4>
-                            <p>Type: {dataset.type}</p>
-                        </div>
-                        <button onClick={() => onSelectDataset(dataset.id, dataset.name)} className="select-item-btn">Select</button>
                     </div>
-                ))}
+                ) : (
+                    datasets.map(dataset => (
+                        <div key={dataset.id} className="dataset-item item-card">
+                            <div className="dataset-preview">
+                                {dataset.type === 'image' && <img src={dataset.preview} alt={dataset.name} />}
+                            </div>
+                            <div className="item-info">
+                                <h4>{dataset.name}</h4>
+                                <p>Type: {dataset.type}</p>
+                            </div>
+                            <button onClick={() => onSelectDataset(dataset.id, dataset.name)} className="select-item-btn">Select</button>
+                        </div>
+                    ))
+                )}
             </div>
         </div>
     );
 };
 
-const LoadWorkflowModal = ({ onLoadWorkflow, closeModal }) => {
+const LoadWorkflowModal = ({ onLoadWorkflow, closeModal, onCreateNewWorkflow }) => {
     const [workflows, setWorkflows] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
 
+    const fetchWorkflows = useCallback(async () => {
+        try {
+            setIsLoading(true);
+            const response = await fetch('/api/v1/workflows');
+            if (!response.ok) throw new Error('Failed to fetch workflows');
+            const data = await response.json();
+            setWorkflows(data);
+        } catch (error) {
+            console.error(error);
+            alert(error.message);
+        } finally {
+            setIsLoading(false);
+        }
+    }, []);
+
     useEffect(() => {
+codex/add-empty-state-handling-for-various-components
+
         const fetchWorkflows = async () => {
             try {
                 setIsLoading(true);
@@ -197,11 +268,19 @@ const LoadWorkflowModal = ({ onLoadWorkflow, closeModal }) => {
                 setIsLoading(false);
             }
         };
+main
         fetchWorkflows();
-    }, []);
+    }, [fetchWorkflows]);
 
     const handleLoad = (workflowId) => {
         onLoadWorkflow(workflowId);
+        closeModal();
+    };
+
+    const handleCreateNew = () => {
+        if (onCreateNewWorkflow) {
+            onCreateNewWorkflow();
+        }
         closeModal();
     };
 
@@ -211,7 +290,14 @@ const LoadWorkflowModal = ({ onLoadWorkflow, closeModal }) => {
                 {isLoading ? (
                     <p>Loading workflows...</p>
                 ) : workflows.length === 0 ? (
-                    <p>No saved workflows found.</p>
+                    <div className="empty-state">
+                        <h4>No saved workflows found</h4>
+                        <p>Try fetching again or start a new workflow.</p>
+                        <div className="empty-state-actions">
+                            <button onClick={fetchWorkflows} className="select-item-btn">Retry</button>
+                            <button onClick={handleCreateNew} className="configure-btn">Create new workflow</button>
+                        </div>
+                    </div>
                 ) : (
                     workflows.map(workflow => (
                         <div key={workflow.id} className="item-card">
@@ -663,7 +749,7 @@ const App = () => {
             case 'data_hub':
                 return <DataHubConfigurator onSelectDataset={handleSelectDataset} />;
             case 'load_workflow':
-                return <LoadWorkflowModal onLoadWorkflow={handleLoadWorkflow} closeModal={closeModal} />;
+                return <LoadWorkflowModal onLoadWorkflow={handleLoadWorkflow} closeModal={closeModal} onCreateNewWorkflow={clearCanvas} />;
             default:
                 return null;
         }
