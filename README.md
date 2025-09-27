@@ -12,6 +12,14 @@ This repository now contains a minimal FastAPI backend with a React/Vite front-e
 - Python 3.10+
 - (Optional) Docker & Docker Compose
 
+## Environment configuration
+
+- Generate a new **GEMINI_API_KEY** in your Google Cloud project and revoke any previously exposed keys.
+- Provide the key to the application via environment variables instead of committing it to the repository.
+  - For local development you can create an `.env` file (ignored by Git) containing `GEMINI_API_KEY=<your-new-key>`.
+  - Alternatively, export the variable in your shell session before starting the services: `export GEMINI_API_KEY=<your-new-key>`.
+- In automated environments (Docker, CI/CD, hosting providers), inject the variable using the platform's secret manager or runtime configuration features.
+
 ## Backend setup
 
 1. Install dependencies:
