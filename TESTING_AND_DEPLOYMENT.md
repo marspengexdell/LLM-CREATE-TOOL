@@ -162,16 +162,13 @@ networks:
 _Note: For production, the frontend would typically handle proxying `/api` requests to the backend container, so only the frontend port needs to be exposed to the public._
 
 ### 3.5. Environment Variable Management
--   Sensitive information, such as the `API_KEY` for the Gemini API, must not be hardcoded.
--   A `.env` file will be created in the project's root directory to store these variables.
--   **Example `.env` file:**
-    ```
-    # Environment variables for the backend service
-    API_KEY="your-google-gemini-api-key-here"
-    ```
--   This `.env` file will be loaded by the `backend` service in `docker-compose.yml`.
--   **Crucially, the `.env` file must be added to `.gitignore`** to prevent secrets from being committed to version control.
-```
-# .gitignore
-.env
-```
+-   Sensitive information, such as the `GEMINI_API_KEY`, must never be hardcoded or committed to the repository.
+-   Revoke compromised keys immediately in the Google Cloud console and generate replacements as needed.
+-   Provide secrets to the application through runtime environment variables:
+    -   For local development, create a personal `.env` file (ignored by Git) containing:
+        ```
+        GEMINI_API_KEY="your-rotated-google-gemini-api-key"
+        ```
+        This file should be created manually on each developer machine after retrieving the key from your secrets manager.
+    -   In containerized or hosted environments, inject the variable via the platform's secret management features instead of copying files into the image.
+-   Confirm that `.env` files remain excluded from version control via `.gitignore`.
