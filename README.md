@@ -4,7 +4,7 @@
 
 # Run and deploy your AI Studio app
 
-This repository now contains a minimal FastAPI backend with a React/Vite front-end for orchestrating multimodal workflows. The backend provides dataset and workflow management APIs as well as a stubbed execution engine that proxies Gemini report generation securely on the server.
+This repository now contains a minimal FastAPI backend with a React/Vite front-end for orchestrating multimodal workflows. The backend provides dataset and workflow management APIs as well as a stubbed execution engine that produces placeholder outputs server-side so the UI can visualise runs without external dependencies.
 
 ## Prerequisites
 
@@ -14,14 +14,10 @@ This repository now contains a minimal FastAPI backend with a React/Vite front-e
 
 ## Backend setup
 
-1. Install dependencies:
+1. Provide a `GEMINI_API_KEY` environment variable (e.g. via your shell or Docker Compose overrides). The key is **not** stored in the repository—create a local `.env` file if desired, but keep it out of source control.
+2. Install dependencies:
    ```bash
    pip install -r requirements.txt
-   ```
-2. Configure environment variables by creating a `.env` file in the project root:
-   ```env
-   GEMINI_API_KEY=your_api_key_here  # Optional but required for real Gemini responses
-   GEMINI_MODEL=gemini-1.5-flash     # Optional override
    ```
 3. Run the API server:
    ```bash
@@ -38,7 +34,7 @@ The API will be available at `http://localhost:8000` with the following routes:
 - `POST /api/v1/workflows/save`
 - `POST /api/v1/workflow/run`
 
-Uploaded datasets and workflow definitions are stored under `storage/datasets/` and `storage/workflows/` respectively. Execution logs are written to `storage/logs/backend.log`.
+Uploaded datasets are written to per-dataset folders inside `storage/datasets/` along with a JSON metadata file. Workflow definitions are persisted to `storage/workflows/`, and execution logs are written to `storage/logs/backend.log`.
 
 ## Frontend setup
 
@@ -51,7 +47,7 @@ Uploaded datasets and workflow definitions are stored under `storage/datasets/` 
    npm run dev
    ```
 
-The app runs on `http://localhost:3000` and proxies `/api` requests to the backend (`http://localhost:8000` by default). The frontend no longer requires direct access to the Gemini API key; all Gemini calls are handled server-side.
+The app runs on `http://localhost:3000` and proxies `/api` requests to the backend (`http://localhost:8000` by default).
 
 ## Run with Docker Compose
 
