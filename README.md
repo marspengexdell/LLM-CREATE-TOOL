@@ -33,6 +33,10 @@ The API will be available at `http://localhost:8000` with the following routes:
 - `POST /api/v1/workflows/save`
 - `POST /api/v1/workflow/run`
 
+### Dataset uploads
+
+`POST /api/v1/datasets/upload` accepts a multipart form field named `file`. Uploads are restricted to the following extensions: `.bmp`, `.csv`, `.gif`, `.jpeg`, `.jpg`, `.json`, `.md`, `.png`, `.txt`, and `.webp`. The API responds with the stored dataset metadata, including the generated dataset `id` and a storage `path` (relative to the backend `storage/` directory) alongside the original filename, size, MIME type, and preview data when available.
+
 Uploaded datasets and workflow definitions are stored under `storage/datasets/` and `storage/workflows/` respectively. Execution logs are written to `storage/logs/backend.log`.
 
 ## Frontend setup
