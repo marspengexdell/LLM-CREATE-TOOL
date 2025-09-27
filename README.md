@@ -293,6 +293,13 @@ curl -sS -X POST http://localhost:8000/api/v1/workflow/run \
 
 When you are finished, you can remove the temporary files with `rm -r smoke-tests`.
 
-## Testing (future work)
+## Testing
 
-Unit tests and CI pipelines are not yet configured. Recommended next steps include adding pytest coverage for the execution engine and Vitest/RTL coverage for critical frontend interactions.
+The frontend includes Vitest suites that cover critical workflow interactions such as uploading datasets, saving/loading workflows, and executing a run. To install dependencies and run the tests locally:
+
+```bash
+npm install
+npm run test
+```
+
+Vitest will use a mocked backend (via MSW) so no API services need to be running for these checks.
