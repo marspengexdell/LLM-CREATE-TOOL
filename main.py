@@ -31,8 +31,9 @@ except Exception:  # pragma: no cover - fallback when package missing during imp
     GoogleAPIError = Exception  # type: ignore
 
 main
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 try:  # pragma: no cover - graceful degradation if dependency missing
@@ -97,6 +98,55 @@ if _GENAI_IMPORT_ERROR:
     LOGGER.warning(_GENAI_IMPORT_ERROR)
 
 
+def _error_detail(message: str, *, error_code: str, details: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Helper to construct detail payloads for HTTP exceptions."""
+
+    payload: Dict[str, Any] = {"message": message, "error_code": error_code}
+    if details is not None:
+        payload["details"] = details
+    return payload
+
+
+def _normalise_error(detail: Any) -> tuple[str, Optional[Dict[str, Any]]]:
+    """Extract a message and detail payload from HTTPException.detail."""
+
+    default_message = "An error occurred."
+    message = default_message
+    error_code: Optional[str] = None
+    extra_details: Any = None
+
+    if isinstance(detail, dict):
+        message = str(detail.get("message") or default_message)
+        error_code = detail.get("error_code") or detail.get("code")
+        extra_details = detail.get("details")
+    elif isinstance(detail, str):
+        message = detail
+    elif detail is not None:
+        message = str(detail)
+
+    combined_details: Optional[Dict[str, Any]]
+    if error_code is None and extra_details is None:
+        combined_details = None
+    else:
+        if isinstance(extra_details, dict):
+            combined_details = dict(extra_details)
+        elif extra_details is None:
+            combined_details = {}
+        else:
+            combined_details = {"context": extra_details}
+
+        if error_code:
+            combined_details.setdefault("errorCode", error_code)
+
+        if not combined_details:
+            combined_details = None
+
+    return message, combined_details
+
+
+# ---------------------------------------------------------------------------
+# FastAPI setup
+# ---------------------------------------------------------------------------
 class GeminiService:
     """Thin wrapper around the google-generativeai client."""
 
@@ -195,6 +245,30 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:  # pragma: no cover - exercised via API
+    message, details = _normalise_error(exc.detail)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": {"code": exc.status_code, "message": message, "details": details}},
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:  # pragma: no cover - defensive guard
+    LOGGER.exception("Unhandled error while processing request: %s", exc)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": {
+                "code": 500,
+                "message": "Internal server error.",
+                "details": {"errorCode": "INTERNAL_SERVER_ERROR"},
+            }
+        },
+    )
 
 # ---------------------------------------------------------------------------
 # Pydantic models
@@ -452,20 +526,46 @@ main
 @app.post("/api/v1/datasets/upload")
 async def upload_dataset(file: UploadFile = File(...)) -> Dict[str, Any]:
     if not file.filename:
-        raise HTTPException(status_code=400, detail="Uploaded file must include a filename")
+        raise HTTPException(
+            status_code=400,
+            detail=_error_detail(
+                "Uploaded file must include a filename.",
+                error_code="DATASET_MISSING_FILENAME",
+            ),
+        )
 
     original_filename = _normalise_filename(file.filename)
     extension = Path(original_filename).suffix.lower()
     if extension not in ALLOWED_EXTENSIONS:
-        raise HTTPException(status_code=400, detail="File type is not supported")
+        raise HTTPException(
+            status_code=400,
+            detail=_error_detail(
+                "File type is not supported.",
+                error_code="DATASET_UNSUPPORTED_TYPE",
+                details={"allowedExtensions": sorted(ALLOWED_EXTENSIONS)},
+            ),
+        )
 
     content = await file.read()
     size_bytes = len(content)
 
     if size_bytes == 0:
-        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+        raise HTTPException(
+            status_code=400,
+            detail=_error_detail(
+                "Uploaded file is empty.",
+                error_code="DATASET_EMPTY_FILE",
+            ),
+        )
     if size_bytes > MAX_UPLOAD_SIZE_BYTES:
-        raise HTTPException(status_code=400, detail="File exceeds maximum allowed size of 20MB")
+        raise HTTPException(
+            status_code=400,
+            detail=_error_detail(
+                "File exceeds maximum allowed size of 20MB.",
+                error_code="DATASET_FILE_TOO_LARGE",
+                details={"maxBytes": MAX_UPLOAD_SIZE_BYTES},
+            ),
+        )
 
     dataset_id = str(uuid4())
 codex/rewrite-backend-using-fastapi-and-implement-routes-k68a2h
@@ -511,7 +611,14 @@ codex/rewrite-backend-using-fastapi-and-implement-routes-k68a2h
         allowed = ", ".join(sorted(ALLOWED_EXTENSIONS))
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported file type. Allowed extensions: {allowed}",
+            detail=_error_detail(
+                "Unsupported file type.",
+                error_code="DATASET_UNSUPPORTED_TYPE",
+                details={
+                    "allowedExtensions": sorted(ALLOWED_EXTENSIONS),
+                    "message": f"Allowed extensions: {allowed}",
+                },
+            ),
         )
     stored_name = f"{dataset_id}{extension}"
     stored_path = DATASETS_DIR / stored_name
@@ -573,7 +680,14 @@ def list_workflows() -> List[Dict[str, Any]]:
 def get_workflow(workflow_id: str) -> Dict[str, Any]:
     workflow_path = WORKFLOWS_DIR / f"{workflow_id}.json"
     if not workflow_path.exists():
-        raise HTTPException(status_code=404, detail="Workflow not found")
+        raise HTTPException(
+            status_code=404,
+            detail=_error_detail(
+                "Workflow not found.",
+                error_code="WORKFLOW_NOT_FOUND",
+                details={"workflowId": workflow_id},
+            ),
+        )
     return _load_json(workflow_path, {})
 
 
@@ -632,14 +746,31 @@ main
 
         for edge in edges:
             if edge.fromNode not in self.nodes or edge.toNode not in self.nodes:
-                raise HTTPException(status_code=400, detail=f"Edge {edge.id} references unknown nodes")
+                raise HTTPException(
+                    status_code=400,
+                    detail=_error_detail(
+                        f"Edge {edge.id} references unknown nodes.",
+                        error_code="WORKFLOW_INVALID_EDGE",
+                        details={
+                            "edgeId": edge.id,
+                            "fromNode": edge.fromNode,
+                            "toNode": edge.toNode,
+                        },
+                    ),
+                )
             self.adjacency[edge.fromNode].append(edge.toNode)
             self.incoming_edges[edge.toNode].append(edge)
             indegree[edge.toNode] += 1
 
         queue: deque[str] = deque([node_id for node_id, degree in indegree.items() if degree == 0])
         if not queue and self.nodes:
-            raise HTTPException(status_code=400, detail="Workflow has no entry nodes (cycle detected)")
+            raise HTTPException(
+                status_code=400,
+                detail=_error_detail(
+                    "Workflow has no entry nodes (cycle detected).",
+                    error_code="WORKFLOW_NO_ENTRY_NODES",
+                ),
+            )
 
         execution_order: List[str] = []
         while queue:
@@ -651,7 +782,13 @@ main
                     queue.append(neighbor)
 
         if len(execution_order) != len(self.nodes):
-            raise HTTPException(status_code=400, detail="Workflow contains cycles and cannot be executed")
+            raise HTTPException(
+                status_code=400,
+                detail=_error_detail(
+                    "Workflow contains cycles and cannot be executed.",
+                    error_code="WORKFLOW_CONTAINS_CYCLE",
+                ),
+            )
 
         self.execution_order = execution_order
 
@@ -826,7 +963,13 @@ main
 @app.post("/api/v1/workflow/run", response_model=WorkflowRunResponse)
 def run_workflow(definition: WorkflowDefinition) -> WorkflowRunResponse:
     if not definition.nodes:
-        raise HTTPException(status_code=400, detail="Workflow must contain at least one node")
+        raise HTTPException(
+            status_code=400,
+            detail=_error_detail(
+                "Workflow must contain at least one node.",
+                error_code="WORKFLOW_EMPTY",
+            ),
+        )
 
 codex/rewrite-backend-using-fastapi-and-implement-routes-k68a2h
     executor = WorkflowExecutor(definition, gemini_service=GEMINI_SERVICE)
