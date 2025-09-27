@@ -20,6 +20,16 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
+codex/rewrite-backend-using-fastapi-and-implement-routes-k68a2h
+
+try:  # Optional import to allow unit tests without the dependency installed.
+    import google.generativeai as genai  # type: ignore
+    from google.api_core.exceptions import GoogleAPIError  # type: ignore
+except Exception:  # pragma: no cover - fallback when package missing during import
+    genai = None  # type: ignore
+    GoogleAPIError = Exception  # type: ignore
+
+main
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -45,15 +55,23 @@ LOGS_DIR = STORAGE_DIR / "logs"
 for directory in (DATASETS_DIR, WORKFLOWS_DIR, LOGS_DIR):
     directory.mkdir(parents=True, exist_ok=True)
 
+codex/rewrite-backend-using-fastapi-and-implement-routes-k68a2h
+
+DATASETS_INDEX_PATH = DATASETS_DIR / "index.json"
+
+main
 MAX_UPLOAD_SIZE_BYTES = 20 * 1024 * 1024
 PREVIEW_LIMIT_BYTES = 1 * 1024 * 1024
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
 TEXT_EXTENSIONS = {".txt", ".md", ".json", ".csv"}
 ALLOWED_EXTENSIONS = IMAGE_EXTENSIONS | TEXT_EXTENSIONS
+codex/rewrite-backend-using-fastapi-and-implement-routes-k68a2h
 
 DATASET_METADATA_FILENAME = "metadata.json"
 MAX_CONTEXT_SNIPPET_CHARS = 4000
+
+main
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -71,6 +89,7 @@ if not LOGGER.handlers:
     file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
     LOGGER.addHandler(file_handler)
 
+codex/rewrite-backend-using-fastapi-and-implement-routes-k68a2h
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 if _GENAI_IMPORT_ERROR:
@@ -142,6 +161,25 @@ class GeminiService:
 
 
 GEMINI_SERVICE = GeminiService(LOGGER)
+
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_DEFAULT_MODEL = os.getenv("GEMINI_DEFAULT_MODEL", "gemini-1.5-flash")
+_GEMINI_CONFIGURED = False
+
+if genai is None:
+    LOGGER.warning("google-generativeai package is unavailable; Gemini functionality is disabled.")
+else:
+    if GEMINI_API_KEY:
+        try:
+            genai.configure(api_key=GEMINI_API_KEY)
+            _GEMINI_CONFIGURED = True
+            LOGGER.info("Gemini client configured successfully.")
+        except Exception as exc:  # pylint: disable=broad-except
+            LOGGER.error("Failed to configure Gemini client: %s", exc)
+    else:
+        LOGGER.warning("GEMINI_API_KEY is not set; Gemini functionality is disabled.")
+main
 
 # ---------------------------------------------------------------------------
 # FastAPI setup
@@ -220,6 +258,17 @@ def _load_json(path: Path, default: Any) -> Any:
 
 def _save_json(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+codex/rewrite-backend-using-fastapi-and-implement-routes-k68a2h
+
+
+
+def _dataset_index() -> List[Dict[str, Any]]:
+    return _load_json(DATASETS_INDEX_PATH, [])
+
+
+def _write_dataset_index(entries: List[Dict[str, Any]]) -> None:
+    _save_json(DATASETS_INDEX_PATH, entries)
+main
 
 
 def _detect_dataset_type(filename: str) -> str:
@@ -247,6 +296,7 @@ def _detect_mime_type(extension: str) -> str:
     return mapping.get(extension.lower(), "application/octet-stream")
 
 
+codex/rewrite-backend-using-fastapi-and-implement-routes-k68a2h
 def _dataset_dir(dataset_id: str) -> Path:
     return DATASETS_DIR / dataset_id
 
@@ -320,6 +370,49 @@ def _collect_dataset_metadata() -> List[Dict[str, Any]]:
     datasets.sort(key=lambda item: item.get("uploadedAt", ""), reverse=True)
     return datasets
 
+def _format_inputs_for_prompt(inputs: Dict[str, Any]) -> str:
+    if not inputs:
+        return "No inputs were provided."
+    try:
+        return json.dumps(inputs, ensure_ascii=False, indent=2, default=str)
+    except TypeError:
+        serialisable = {key: repr(value) for key, value in inputs.items()}
+        return json.dumps(serialisable, ensure_ascii=False, indent=2)
+
+
+def _generate_gemini_report(model_id: str, prompt: str) -> str:
+    if genai is None or not _GEMINI_CONFIGURED:
+        raise RuntimeError("Gemini client is not configured. Please set the GEMINI_API_KEY environment variable.")
+
+    try:
+        model = genai.GenerativeModel(model_id)
+        response = model.generate_content(prompt)
+    except GoogleAPIError as exc:  # type: ignore[arg-type]
+        raise RuntimeError(f"Gemini API error: {exc}") from exc
+    except Exception as exc:  # pylint: disable=broad-except
+        raise RuntimeError(f"Gemini request failed: {exc}") from exc
+
+    text_response = getattr(response, "text", None)
+    if text_response:
+        return text_response.strip()
+
+    candidate_texts: List[str] = []
+    for candidate in getattr(response, "candidates", []) or []:
+        content = getattr(candidate, "content", None)
+        parts = getattr(content, "parts", None) if content else None
+        if not parts:
+            continue
+        for part in parts:
+            part_text = getattr(part, "text", None)
+            if part_text:
+                candidate_texts.append(part_text)
+
+    if candidate_texts:
+        return "\n".join(candidate_texts).strip()
+
+    raise RuntimeError("Gemini response did not contain any text output.")
+main
+
 
 # ---------------------------------------------------------------------------
 # Dataset management
@@ -348,7 +441,11 @@ def list_models() -> List[Dict[str, str]]:
 def list_datasets() -> List[Dict[str, Any]]:
     """Return metadata for uploaded datasets."""
 
+codex/rewrite-backend-using-fastapi-and-implement-routes-k68a2h
     return _collect_dataset_metadata()
+
+    return _dataset_index()
+main
 
 
 @app.post("/api/v1/datasets/upload")
@@ -370,6 +467,7 @@ async def upload_dataset(file: UploadFile = File(...)) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail="File exceeds maximum allowed size of 20MB")
 
     dataset_id = str(uuid4())
+codex/rewrite-backend-using-fastapi-and-implement-routes-k68a2h
     dataset_folder = _dataset_dir(dataset_id)
     dataset_folder.mkdir(parents=True, exist_ok=False)
 
@@ -406,6 +504,41 @@ async def upload_dataset(file: UploadFile = File(...)) -> Dict[str, Any]:
     _save_json(_dataset_metadata_path(dataset_id), metadata)
 
     LOGGER.info("Uploaded dataset %s (%s) -> %s", original_filename, dataset_id, storage_path)
+
+    extension = Path(file.filename).suffix.lower()
+    if extension not in ALLOWED_EXTENSIONS:
+        allowed = ", ".join(sorted(ALLOWED_EXTENSIONS))
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type. Allowed extensions: {allowed}",
+        )
+    stored_name = f"{dataset_id}{extension}"
+    stored_path = DATASETS_DIR / stored_name
+    stored_path.write_bytes(content)
+
+    preview: Optional[str] = None
+    if extension.lower() in IMAGE_EXTENSIONS and size_bytes <= PREVIEW_LIMIT_BYTES:
+        encoded = base64.b64encode(content).decode("utf-8")
+        preview = f"data:{_detect_mime_type(extension)};base64,{encoded}"
+
+    metadata = {
+        "id": dataset_id,
+        "name": file.filename,
+        "filename": stored_name,
+        "path": str(Path("datasets") / stored_name),
+        "size": size_bytes,
+        "type": _detect_dataset_type(file.filename),
+        "mimeType": _detect_mime_type(extension),
+        "preview": preview,
+        "uploadedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+
+    entries = _dataset_index()
+    entries.append(metadata)
+    _write_dataset_index(entries)
+
+    LOGGER.info("Uploaded dataset %s (%s)", file.filename, dataset_id)
+main
     return metadata
 
 
@@ -464,7 +597,11 @@ def save_workflow(definition: WorkflowDefinition) -> Dict[str, str]:
 class WorkflowExecutor:
     """Minimal workflow executor that processes nodes in topological order."""
 
+codex/rewrite-backend-using-fastapi-and-implement-routes-k68a2h
     def __init__(self, definition: WorkflowDefinition, gemini_service: Optional[GeminiService] = None) -> None:
+
+    def __init__(self, definition: WorkflowDefinition) -> None:
+main
         self.definition = definition
         self.nodes = {node.id: node for node in definition.nodes}
         self.node_outputs: Dict[str, Dict[str, Any]] = {}
@@ -482,7 +619,10 @@ class WorkflowExecutor:
         self.adjacency: Dict[str, List[str]] = defaultdict(list)
         self.incoming_edges: Dict[str, List[WorkflowEdge]] = defaultdict(list)
         self._build_graph(definition.edges)
+codex/rewrite-backend-using-fastapi-and-implement-routes-k68a2h
         self.gemini_service = gemini_service
+
+main
 
     def _build_graph(self, edges: List[WorkflowEdge]) -> None:
         indegree = defaultdict(int)
@@ -548,6 +688,7 @@ class WorkflowExecutor:
 
         data = dict(node.data)
         if node.type == "generate_report":
+codex/rewrite-backend-using-fastapi-and-implement-routes-k68a2h
             prompt = data.get("prompt") or "Summarise the provided workflow inputs into a concise report."
             model_name = data.get("modelId") or data.get("model") or "gemini-1.5-flash"
 
@@ -562,6 +703,29 @@ class WorkflowExecutor:
                 raise RuntimeError(error_message)
 
             data["report"] = report
+
+            prompt = data.get(
+                "prompt",
+                "Generate a detailed report that summarises the provided workflow inputs.",
+            )
+            context = data.get("context")
+            formatted_inputs = _format_inputs_for_prompt(inputs)
+            prompt_sections = [prompt]
+            if context:
+                prompt_sections.append(str(context))
+            prompt_sections.extend(["Workflow inputs:", formatted_inputs])
+            final_prompt = "\n\n".join(prompt_sections)
+
+            model_id = data.get("model") or data.get("modelId") or GEMINI_DEFAULT_MODEL
+            try:
+                report = _generate_gemini_report(model_id, final_prompt)
+            except Exception as exc:  # pylint: disable=broad-except
+                raise RuntimeError(f"Gemini report generation failed: {exc}") from exc
+
+            data["report"] = report
+            data["model"] = model_id
+            data["aggregated_inputs"] = formatted_inputs
+main
             return {"out": report}, data
 
         if node.type == "decision_logic":
@@ -598,5 +762,8 @@ def run_workflow(definition: WorkflowDefinition) -> WorkflowRunResponse:
     if not definition.nodes:
         raise HTTPException(status_code=400, detail="Workflow must contain at least one node")
 
+codex/rewrite-backend-using-fastapi-and-implement-routes-k68a2h
     executor = WorkflowExecutor(definition, gemini_service=GEMINI_SERVICE)
+
+main
     return executor.run()

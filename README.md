@@ -12,6 +12,14 @@ This repository now contains a minimal FastAPI backend with a React/Vite front-e
 - Python 3.10+
 - (Optional) Docker & Docker Compose
 
+## Environment configuration
+
+- Generate a new **GEMINI_API_KEY** in your Google Cloud project and revoke any previously exposed keys.
+- Provide the key to the application via environment variables instead of committing it to the repository.
+  - For local development you can create an `.env` file (ignored by Git) containing `GEMINI_API_KEY=<your-new-key>`.
+  - Alternatively, export the variable in your shell session before starting the services: `export GEMINI_API_KEY=<your-new-key>`.
+- In automated environments (Docker, CI/CD, hosting providers), inject the variable using the platform's secret manager or runtime configuration features.
+
 ## Backend setup
 
 1. Provide a `GEMINI_API_KEY` environment variable (e.g. via your shell or Docker Compose overrides). The key is **not** stored in the repository—create a local `.env` file if desired, but keep it out of source control.
@@ -19,7 +27,11 @@ This repository now contains a minimal FastAPI backend with a React/Vite front-e
    ```bash
    pip install -r requirements.txt
    ```
+
 3. Run the API server:
+
+2. Run the API server:
+ main
    ```bash
    uvicorn main:app --host 0.0.0.0 --port 8000 --reload
    ```
@@ -34,7 +46,15 @@ The API will be available at `http://localhost:8000` with the following routes:
 - `POST /api/v1/workflows/save`
 - `POST /api/v1/workflow/run`
 
+
 Uploaded datasets are written to per-dataset folders inside `storage/datasets/` along with a JSON metadata file. Workflow definitions are persisted to `storage/workflows/`, and execution logs are written to `storage/logs/backend.log`.
+
+### Dataset uploads
+
+`POST /api/v1/datasets/upload` accepts a multipart form field named `file`. Uploads are restricted to the following extensions: `.bmp`, `.csv`, `.gif`, `.jpeg`, `.jpg`, `.json`, `.md`, `.png`, `.txt`, and `.webp`. The API responds with the stored dataset metadata, including the generated dataset `id` and a storage `path` (relative to the backend `storage/` directory) alongside the original filename, size, MIME type, and preview data when available.
+
+Uploaded datasets and workflow definitions are stored under `storage/datasets/` and `storage/workflows/` respectively. Execution logs are written to `storage/logs/backend.log`.
+ main
 
 ## Frontend setup
 
