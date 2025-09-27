@@ -6,9 +6,14 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+codex/create-ci-workflow-with-caching-and-docker-build
     "lint": "tsc --noEmit",
     "test": "vite build --mode test",
     "preview": "vite preview"
+
+    "preview": "vite preview",
+    "test": "vitest"
+main
   },
   "dependencies": {
     "react": "^19.1.1",
@@ -17,7 +22,14 @@
   "devDependencies": {
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.0.0",
+    "@types/testing-library__jest-dom": "^6.0.0",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.0.0",
+    "@testing-library/user-event": "^14.5.2",
+    "jsdom": "^24.1.3",
+    "msw": "^2.6.1",
     "typescript": "~5.8.2",
-    "vite": "^6.2.0"
+    "vite": "^6.2.0",
+    "vitest": "^2.1.3"
   }
 }
