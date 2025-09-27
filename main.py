@@ -313,6 +313,7 @@ class WorkflowRunNode(BaseModel):
 
 
 class WorkflowRunResponse(BaseModel):
+    run_id: str
     nodes: List[WorkflowRunNode]
 
 
@@ -712,11 +713,14 @@ def save_workflow(definition: WorkflowDefinition) -> Dict[str, str]:
 class WorkflowExecutor:
     """Minimal workflow executor that processes nodes in topological order."""
 
-codex/rewrite-backend-using-fastapi-and-implement-routes-k68a2h
-    def __init__(self, definition: WorkflowDefinition, gemini_service: Optional[GeminiService] = None) -> None:
-
-    def __init__(self, definition: WorkflowDefinition) -> None:
-main
+    def __init__(
+        self,
+        definition: WorkflowDefinition,
+        *,
+        gemini_service: Optional[GeminiService] = None,
+        logger: Optional[logging.Logger] = None,
+        run_id: Optional[str] = None,
+    ) -> None:
         self.definition = definition
         self.nodes = {node.id: node for node in definition.nodes}
         self.node_outputs: Dict[str, Dict[str, Any]] = {}
@@ -734,10 +738,9 @@ main
         self.adjacency: Dict[str, List[str]] = defaultdict(list)
         self.incoming_edges: Dict[str, List[WorkflowEdge]] = defaultdict(list)
         self._build_graph(definition.edges)
-codex/rewrite-backend-using-fastapi-and-implement-routes-k68a2h
         self.gemini_service = gemini_service
-
-main
+        self.logger = logger or LOGGER
+        self.run_id = run_id or str(uuid4())
 
     def _build_graph(self, edges: List[WorkflowEdge]) -> None:
         indegree = defaultdict(int)
@@ -793,25 +796,41 @@ main
         self.execution_order = execution_order
 
     def run(self) -> WorkflowRunResponse:
+        if not hasattr(self, "logger"):
+            self.logger = LOGGER
+        if not hasattr(self, "run_id"):
+            self.run_id = str(uuid4())
+
+        self.logger.info(
+            "Run %s starting execution of %d nodes", self.run_id, len(self.execution_order)
+        )
         for node_id in self.execution_order:
             node = self.nodes[node_id]
             state = self.node_states[node_id]
             state.status = "running"
+            self.logger.info(
+                "Run %s starting node %s (%s)", self.run_id, node.id, node.type
+            )
             inputs = self._collect_inputs(node_id)
             try:
                 outputs, updated_data = self._execute_node(node, inputs)
                 state.data = updated_data
                 state.status = "done"
                 self.node_outputs[node_id] = outputs
-                LOGGER.info("Executed node %s (%s)", node.id, node.type)
+                self.logger.info(
+                    "Run %s completed node %s (%s)", self.run_id, node.id, node.type
+                )
             except Exception as exc:  # pylint: disable=broad-except
                 state.status = "failed"
                 state.data = {**state.data, "error": str(exc)}
                 self.node_outputs[node_id] = {}
-                LOGGER.exception("Node %s failed: %s", node.id, exc)
+                self.logger.exception(
+                    "Run %s node %s failed: %s", self.run_id, node.id, exc
+                )
 
         ordered_nodes = [self.node_states[node.id] for node in self.definition.nodes]
-        return WorkflowRunResponse(nodes=ordered_nodes)
+        self.logger.info("Run %s completed", self.run_id)
+        return WorkflowRunResponse(run_id=self.run_id, nodes=ordered_nodes)
 
     def _collect_inputs(self, node_id: str) -> Dict[str, Any]:
         inputs: Dict[str, Any] = {}
@@ -933,8 +952,9 @@ main
             try:
                 decision = self._evaluate_decision_condition(condition, input_value)
             except ValueError as exc:
-                LOGGER.warning(
-                    "Decision node %s failed to evaluate condition '%s': %s",
+                self.logger.warning(
+                    "Run %s decision node %s failed to evaluate condition '%s': %s",
+                    self.run_id,
                     node.id,
                     condition,
                     exc,
@@ -971,8 +991,27 @@ def run_workflow(definition: WorkflowDefinition) -> WorkflowRunResponse:
             ),
         )
 
-codex/rewrite-backend-using-fastapi-and-implement-routes-k68a2h
-    executor = WorkflowExecutor(definition, gemini_service=GEMINI_SERVICE)
+    run_id = str(uuid4())
+    log_path = LOGS_DIR / f"{run_id}.log"
+    handler = logging.FileHandler(log_path)
+    handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
 
-main
-    return executor.run()
+    run_logger = logging.getLogger(f"{LOGGER.name}.run.{run_id}")
+    run_logger.setLevel(logging.INFO)
+    run_logger.addHandler(handler)
+
+    executor = WorkflowExecutor(
+        definition,
+        gemini_service=GEMINI_SERVICE,
+        logger=run_logger,
+        run_id=run_id,
+    )
+
+    try:
+        run_logger.info("Run %s started", run_id)
+        response = executor.run()
+        return response
+    finally:
+        run_logger.info("Run %s finished", run_id)
+        run_logger.removeHandler(handler)
+        handler.close()

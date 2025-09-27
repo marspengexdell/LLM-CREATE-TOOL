@@ -158,6 +158,19 @@ html, body {
     background-color: var(--primary-variant-color);
 }
 
+.run-status {
+    position: absolute;
+    top: 4.5rem;
+    right: 1rem;
+    background-color: rgba(76, 175, 80, 0.15);
+    border: 1px solid rgba(76, 175, 80, 0.4);
+    color: var(--success-color);
+    padding: 0.35rem 0.75rem;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    z-index: 9;
+}
+
 .canvas-toolbar button.danger-btn:hover {
     border-color: var(--error-color);
     color: var(--error-color);
