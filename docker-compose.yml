@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: workflow_backend
+    env_file:
+      - .env # Load environment variables from .env file
+    volumes:
+      - .:/app # Mount current directory to container for live-reloading during dev
+    ports:
+      - "8000:8000"
+    networks:
+      - app-network
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: workflow_frontend
+    ports:
+      - "8080:80" # Map host port 8080 to container port 80
+    depends_on:
+      - backend
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
