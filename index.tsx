@@ -197,6 +197,7 @@ const DataHubConfigurator = ({ onSelectDataset }) => {
                     <input
                         ref={fileInputRef}
                         type="file"
+                        aria-label="Dataset file input"
                         onChange={handleFileUpload}
                         style={{ display: 'none' }}
                     />
@@ -472,7 +473,7 @@ const Toolbar = ({ onRun, onSave, onLoad, onClear }) => (
 
 
 // --- MAIN APP COMPONENT ---
-const App = () => {
+export const App = () => {
     const [nodes, setNodes] = useState([]);
     const [edges, setEdges] = useState([]);
     const [draggedItem, setDraggedItem] = useState(null);
@@ -841,6 +842,10 @@ const App = () => {
     );
 };
 
-const container = document.getElementById('root');
-const root = createRoot(container);
-root.render(<App />);
+if (typeof document !== 'undefined') {
+    const container = document.getElementById('root');
+    if (container) {
+        const root = createRoot(container);
+        root.render(<App />);
+    }
+}
