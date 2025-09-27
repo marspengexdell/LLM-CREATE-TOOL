@@ -293,6 +293,13 @@ curl -sS -X POST http://localhost:8000/api/v1/workflow/run \
 
 When you are finished, you can remove the temporary files with `rm -r smoke-tests`.
 
-## Testing (future work)
+## Testing
 
-Unit tests and CI pipelines are not yet configured. Recommended next steps include adding pytest coverage for the execution engine and Vitest/RTL coverage for critical frontend interactions.
+Backend tests are implemented with `pytest`. Install the dependencies and execute the suite with:
+
+```bash
+pip install -r requirements.txt
+pytest
+```
+
+The tests spin up the FastAPI application with in-memory clients so they can run without external services.
