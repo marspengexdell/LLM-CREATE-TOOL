@@ -10,6 +10,7 @@ persistence and a stub workflow executor.  The executor performs a basic
 
 from __future__ import annotations
 
+import ast
 import base64
 import json
 import logging
@@ -683,6 +684,67 @@ main
                 inputs[edge.toPort] = upstream_outputs[edge.fromPort]
         return inputs
 
+    @staticmethod
+    def _evaluate_decision_condition(condition: str, input_value: Any) -> bool:
+        """Evaluate a decision condition using a constrained AST interpreter."""
+
+        try:
+            tree = ast.parse(condition, mode="eval")
+        except SyntaxError as exc:  # pragma: no cover - syntax errors handled as ValueError
+            raise ValueError("invalid syntax") from exc
+
+        def eval_operand(node: ast.AST) -> Any:
+            if isinstance(node, ast.Name) and node.id == "input":
+                return input_value
+            if isinstance(node, ast.Constant):
+                if isinstance(node.value, (int, float, str, bool, type(None))):
+                    return node.value
+                raise ValueError("unsupported constant type")
+            raise ValueError("unsupported expression element")
+
+        def eval_node(node: ast.AST) -> bool:
+            if isinstance(node, ast.Expression):
+                return eval_node(node.body)
+            if isinstance(node, ast.BoolOp):
+                values = [eval_node(value) for value in node.values]
+                if isinstance(node.op, ast.And):
+                    return all(values)
+                if isinstance(node.op, ast.Or):
+                    return any(values)
+                raise ValueError("unsupported boolean operator")
+            if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+                return not eval_node(node.operand)
+            if isinstance(node, ast.Compare):
+                left = eval_operand(node.left)
+                result = True
+                for operator, comparator in zip(node.ops, node.comparators):
+                    right = eval_operand(comparator)
+                    if isinstance(operator, ast.Eq):
+                        comparison = left == right
+                    elif isinstance(operator, ast.NotEq):
+                        comparison = left != right
+                    elif isinstance(operator, ast.Lt):
+                        comparison = left < right
+                    elif isinstance(operator, ast.LtE):
+                        comparison = left <= right
+                    elif isinstance(operator, ast.Gt):
+                        comparison = left > right
+                    elif isinstance(operator, ast.GtE):
+                        comparison = left >= right
+                    else:
+                        raise ValueError("unsupported comparison operator")
+                    result = result and bool(comparison)
+                    left = right
+                return result
+            if isinstance(node, ast.Name) and node.id == "input":
+                return bool(input_value)
+            raise ValueError("unsupported expression element")
+
+        result = eval_node(tree)
+        if not isinstance(result, bool):
+            result = bool(result)
+        return result
+
     def _execute_node(self, node: WorkflowNode, inputs: Dict[str, Any]) -> tuple[Dict[str, Any], Dict[str, Any]]:
         """Placeholder node execution logic."""
 
@@ -731,11 +793,15 @@ main
         if node.type == "decision_logic":
             condition = data.get("condition", "bool(input)")
             input_value = inputs.get("in")
-            local_vars = {"input": input_value}
             try:
-                decision = bool(eval(condition, {"__builtins__": {}}, local_vars))  # noqa: S307
-            except Exception as exc:  # pylint: disable=broad-except
-                LOGGER.warning("Decision node %s failed to evaluate condition '%s': %s", node.id, condition, exc)
+                decision = self._evaluate_decision_condition(condition, input_value)
+            except ValueError as exc:
+                LOGGER.warning(
+                    "Decision node %s failed to evaluate condition '%s': %s",
+                    node.id,
+                    condition,
+                    exc,
+                )
                 decision = bool(input_value)
             data["decision"] = decision
             return {"true": input_value if decision else None, "false": None if decision else input_value}, data
