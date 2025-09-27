@@ -54,7 +54,29 @@ Uploaded datasets are written to per-dataset folders inside `storage/datasets/` 
 `POST /api/v1/datasets/upload` accepts a multipart form field named `file`. Uploads are restricted to the following extensions: `.bmp`, `.csv`, `.gif`, `.jpeg`, `.jpg`, `.json`, `.md`, `.png`, `.txt`, and `.webp`. The API responds with the stored dataset metadata, including the generated dataset `id` and a storage `path` (relative to the backend `storage/` directory) alongside the original filename, size, MIME type, and preview data when available.
 
 Uploaded datasets and workflow definitions are stored under `storage/datasets/` and `storage/workflows/` respectively. Execution logs are written to `storage/logs/backend.log`.
- main
+
+
+### Error responses
+
+All API errors use a consistent envelope so the frontend can reliably surface issues to end users. Error responses have the shape:
+
+```json
+{
+  "error": {
+    "code": 400,
+    "message": "Uploaded file must include a filename.",
+    "details": {
+      "errorCode": "DATASET_MISSING_FILENAME"
+    }
+  }
+}
+```
+
+- `code` is the HTTP status code of the response.
+- `message` is a human readable description.
+- `details` (optional) includes a stable `errorCode` and any additional structured context to help the UI decide how to react.
+
+Unhandled exceptions are logged server-side and returned as HTTP 500 with an `INTERNAL_SERVER_ERROR` code inside `details`.
 
 ## Frontend setup
 
