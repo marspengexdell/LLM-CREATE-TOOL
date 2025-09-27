@@ -1,3 +1,15 @@
+"""FastAPI backend for the workflow builder UI.
+
+The application intentionally keeps the implementation small so that it can
+be extended quickly during prototyping.  The front-end expects a handful of
+REST endpoints that provide model metadata, dataset management, workflow
+persistence and a stub workflow executor.  The executor performs a basic
+ topological sort before running each node with placeholder logic so that
+ the UI can display meaningful status updates.
+"""
+
+from __future__ import annotations
+
 import base64
 import json
 import logging
@@ -5,22 +17,18 @@ import os
 import time
 from collections import defaultdict, deque
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-import google.generativeai as genai
-from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 # ---------------------------------------------------------------------------
-# Environment & Configuration
+# Storage directories
 # ---------------------------------------------------------------------------
 
-load_dotenv()
-
-BASE_DIR = Path(__file__).parent.resolve()
+BASE_DIR = Path(__file__).resolve().parent
 STORAGE_DIR = BASE_DIR / "storage"
 DATASETS_DIR = STORAGE_DIR / "datasets"
 WORKFLOWS_DIR = STORAGE_DIR / "workflows"
@@ -30,24 +38,18 @@ for directory in (DATASETS_DIR, WORKFLOWS_DIR, LOGS_DIR):
     directory.mkdir(parents=True, exist_ok=True)
 
 DATASETS_INDEX_PATH = DATASETS_DIR / "index.json"
-MAX_UPLOAD_SIZE_BYTES = 20 * 1024 * 1024  # 20MB
-PREVIEW_LIMIT_BYTES = 1 * 1024 * 1024  # 1MB for inline previews
+
+MAX_UPLOAD_SIZE_BYTES = 20 * 1024 * 1024
+PREVIEW_LIMIT_BYTES = 1 * 1024 * 1024
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
 TEXT_EXTENSIONS = {".txt", ".md", ".json", ".csv"}
-
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-DEFAULT_GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
-
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
 
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
 
-LOGS_DIR.mkdir(exist_ok=True)
-LOGGER = logging.getLogger("workflow-engine")
+LOGGER = logging.getLogger("workflow-backend")
 LOGGER.setLevel(logging.INFO)
 
 if not LOGGER.handlers:
@@ -60,10 +62,10 @@ if not LOGGER.handlers:
     LOGGER.addHandler(file_handler)
 
 # ---------------------------------------------------------------------------
-# FastAPI Application
+# FastAPI setup
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="Workflow Orchestrator API", version="0.1.0")
+app = FastAPI(title="Workflow Orchestrator API", version="0.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -74,7 +76,7 @@ app.add_middleware(
 )
 
 # ---------------------------------------------------------------------------
-# Pydantic Models
+# Pydantic models
 # ---------------------------------------------------------------------------
 
 
@@ -83,14 +85,14 @@ class Position(BaseModel):
     y: float
 
 
-class WorkflowNodePayload(BaseModel):
+class WorkflowNode(BaseModel):
     id: str
     type: str
     position: Position
     data: Dict[str, Any] = Field(default_factory=dict)
 
 
-class WorkflowEdgePayload(BaseModel):
+class WorkflowEdge(BaseModel):
     id: str
     fromNode: str
     fromPort: str
@@ -102,11 +104,11 @@ class WorkflowDefinition(BaseModel):
     id: Optional[str] = None
     name: Optional[str] = None
     description: Optional[str] = None
-    nodes: List[WorkflowNodePayload]
-    edges: List[WorkflowEdgePayload]
+    nodes: List[WorkflowNode]
+    edges: List[WorkflowEdge]
 
 
-class WorkflowRunResponseNode(BaseModel):
+class WorkflowRunNode(BaseModel):
     id: str
     type: str
     x: float
@@ -116,11 +118,11 @@ class WorkflowRunResponseNode(BaseModel):
 
 
 class WorkflowRunResponse(BaseModel):
-    nodes: List[WorkflowRunResponseNode]
+    nodes: List[WorkflowRunNode]
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Utility helpers
 # ---------------------------------------------------------------------------
 
 
@@ -128,16 +130,14 @@ def _load_json(path: Path, default: Any) -> Any:
     if not path.exists():
         return default
     try:
-        with path.open("r", encoding="utf-8") as f:
-            return json.load(f)
+        return json.loads(path.read_text("utf-8"))
     except json.JSONDecodeError:
-        LOGGER.warning("Failed to decode JSON at %s. Returning default.", path)
+        LOGGER.warning("Failed to read JSON from %s. Returning default.", path)
         return default
 
 
 def _save_json(path: Path, payload: Any) -> None:
-    with path.open("w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _dataset_index() -> List[Dict[str, Any]]:
@@ -173,84 +173,34 @@ def _detect_mime_type(extension: str) -> str:
     return mapping.get(extension.lower(), "application/octet-stream")
 
 
-def _store_uploaded_file(dataset_id: str, upload: UploadFile, content: bytes) -> Path:
-    extension = Path(upload.filename or "").suffix
-    stored_name = f"{dataset_id}{extension}"
-    stored_path = DATASETS_DIR / stored_name
-    with stored_path.open("wb") as f:
-        f.write(content)
-    return stored_path
-
-
-def _prepare_dataset_metadata(dataset_id: str, upload: UploadFile, stored_path: Path, size_bytes: int, preview: Optional[str]) -> Dict[str, Any]:
-    extension = stored_path.suffix.lower()
-    dataset_type = _detect_dataset_type(upload.filename or stored_path.name)
-    return {
-        "id": dataset_id,
-        "name": upload.filename or stored_path.name,
-        "filename": stored_path.name,
-        "type": dataset_type,
-        "size": size_bytes,
-        "mimeType": _detect_mime_type(extension),
-        "preview": preview,
-        "uploadedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-    }
-
-
-def _load_workflow_file(workflow_id: str) -> Dict[str, Any]:
-    workflow_path = WORKFLOWS_DIR / f"{workflow_id}.json"
-    if not workflow_path.exists():
-        raise HTTPException(status_code=404, detail="Workflow not found")
-    with workflow_path.open("r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def _gemini_generate(prompt: str) -> str:
-    if not GEMINI_API_KEY:
-        return "Gemini API key not configured. Returning placeholder report."
-
-    try:
-        model = genai.GenerativeModel(DEFAULT_GEMINI_MODEL)
-        response = model.generate_content(prompt)
-        if hasattr(response, "text") and response.text:
-            return response.text
-        if response.candidates:
-            # Fall back to the first candidate's text if available.
-            return response.candidates[0].content.parts[0].text  # type: ignore[index]
-        return "Gemini response did not include text content."
-    except Exception as exc:  # pylint: disable=broad-except
-        LOGGER.exception("Gemini generation failed: %s", exc)
-        return "Failed to generate report with Gemini. Placeholder response returned."
-
-
 # ---------------------------------------------------------------------------
-# API Endpoints
+# Dataset management
 # ---------------------------------------------------------------------------
 
 
 @app.get("/api/v1/models")
-def list_models() -> List[Dict[str, Any]]:
+def list_models() -> List[Dict[str, str]]:
     """Return a static list of available models."""
-    models = [
+
+    return [
         {
             "id": "gemini-1.5-flash",
             "name": "Gemini 1.5 Flash",
-            "description": "Fast multimodal model suitable for real-time interactions.",
+            "description": "Fast multimodal model for interactive workflows.",
         },
         {
             "id": "gemini-1.5-pro",
             "name": "Gemini 1.5 Pro",
-            "description": "Higher quality Gemini model for complex reasoning tasks.",
+            "description": "Higher quality Gemini model suited for complex reasoning tasks.",
         },
     ]
-    return models
 
 
 @app.get("/api/v1/datasets")
 def list_datasets() -> List[Dict[str, Any]]:
-    """Return dataset metadata stored on disk."""
-    entries = _dataset_index()
-    return entries
+    """Return metadata for uploaded datasets."""
+
+    return _dataset_index()
 
 
 @app.post("/api/v1/datasets/upload")
@@ -267,59 +217,74 @@ async def upload_dataset(file: UploadFile = File(...)) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail="File exceeds maximum allowed size of 20MB")
 
     dataset_id = str(uuid4())
-    stored_path = _store_uploaded_file(dataset_id, file, content)
+    extension = Path(file.filename).suffix
+    stored_name = f"{dataset_id}{extension}"
+    stored_path = DATASETS_DIR / stored_name
+    stored_path.write_bytes(content)
 
     preview: Optional[str] = None
-    extension = stored_path.suffix.lower()
-    if extension in IMAGE_EXTENSIONS and size_bytes <= PREVIEW_LIMIT_BYTES:
-        mime_type = _detect_mime_type(extension)
+    if extension.lower() in IMAGE_EXTENSIONS and size_bytes <= PREVIEW_LIMIT_BYTES:
         encoded = base64.b64encode(content).decode("utf-8")
-        preview = f"data:{mime_type};base64,{encoded}"
+        preview = f"data:{_detect_mime_type(extension)};base64,{encoded}"
 
-    metadata = _prepare_dataset_metadata(dataset_id, file, stored_path, size_bytes, preview)
+    metadata = {
+        "id": dataset_id,
+        "name": file.filename,
+        "filename": stored_name,
+        "size": size_bytes,
+        "type": _detect_dataset_type(file.filename),
+        "mimeType": _detect_mime_type(extension),
+        "preview": preview,
+        "uploadedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
 
     entries = _dataset_index()
-    entries = [entry for entry in entries if entry.get("id") != dataset_id]
     entries.append(metadata)
     _write_dataset_index(entries)
 
-    LOGGER.info("Uploaded dataset %s (%s)", metadata["name"], dataset_id)
+    LOGGER.info("Uploaded dataset %s (%s)", file.filename, dataset_id)
     return metadata
+
+
+# ---------------------------------------------------------------------------
+# Workflow persistence
+# ---------------------------------------------------------------------------
 
 
 @app.get("/api/v1/workflows")
 def list_workflows() -> List[Dict[str, Any]]:
+    """Return metadata for saved workflows."""
+
     workflows: List[Dict[str, Any]] = []
-    for workflow_path in sorted(WORKFLOWS_DIR.glob("*.json")):
-        try:
-            data = _load_json(workflow_path, {})
-            workflow_id = workflow_path.stem
-            workflows.append(
-                {
-                    "id": workflow_id,
-                    "name": data.get("name") or f"Workflow {workflow_id[:8]}",
-                    "description": data.get("description", ""),
-                    "updatedAt": time.strftime(
-                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime(workflow_path.stat().st_mtime)
-                    ),
-                }
-            )
-        except Exception as exc:  # pylint: disable=broad-except
-            LOGGER.exception("Failed to load workflow metadata from %s: %s", workflow_path, exc)
+    for workflow_file in WORKFLOWS_DIR.glob("*.json"):
+        data = _load_json(workflow_file, {})
+        workflows.append(
+            {
+                "id": workflow_file.stem,
+                "name": data.get("name") or f"Workflow {workflow_file.stem[:8]}",
+                "description": data.get("description", ""),
+                "updatedAt": time.strftime(
+                    "%Y-%m-%dT%H:%M:%SZ",
+                    time.gmtime(workflow_file.stat().st_mtime),
+                ),
+            }
+        )
     return workflows
 
 
 @app.get("/api/v1/workflows/{workflow_id}")
 def get_workflow(workflow_id: str) -> Dict[str, Any]:
-    return _load_workflow_file(workflow_id)
+    workflow_path = WORKFLOWS_DIR / f"{workflow_id}.json"
+    if not workflow_path.exists():
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    return _load_json(workflow_path, {})
 
 
 @app.post("/api/v1/workflows/save")
-def save_workflow(definition: WorkflowDefinition) -> Dict[str, Any]:
+def save_workflow(definition: WorkflowDefinition) -> Dict[str, str]:
     workflow_id = definition.id or str(uuid4())
     payload = definition.dict()
     payload["id"] = workflow_id
-    payload.setdefault("name", f"Workflow {workflow_id[:8]}")
 
     workflow_path = WORKFLOWS_DIR / f"{workflow_id}.json"
     _save_json(workflow_path, payload)
@@ -329,157 +294,135 @@ def save_workflow(definition: WorkflowDefinition) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Workflow Execution
+# Workflow execution
 # ---------------------------------------------------------------------------
 
 
-def _gather_inputs(
-    node_id: str,
-    incoming_edges: Dict[str, List[WorkflowEdgePayload]],
-    node_outputs: Dict[str, Dict[str, Any]],
-) -> Dict[str, Any]:
-    inputs: Dict[str, Any] = {}
-    for edge in incoming_edges.get(node_id, []):
-        source_output = node_outputs.get(edge.fromNode, {})
-        if edge.fromPort in source_output:
-            inputs[edge.toPort] = source_output[edge.fromPort]
-    return inputs
+class WorkflowExecutor:
+    """Minimal workflow executor that processes nodes in topological order."""
 
-
-def _execute_node(
-    node: WorkflowNodePayload,
-    current_state: Dict[str, Any],
-    inputs: Dict[str, Any],
-) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    node_type = node.type
-    data = dict(current_state)
-
-    if node_type == "image_input":
-        return {"out": data.get("image")}, data
-
-    if node_type == "text_input":
-        return {"out": data.get("text")}, data
-
-    if node_type == "data_hub":
-        dataset_id = data.get("datasetId")
-        dataset_name = data.get("datasetName")
-        if dataset_id:
-            entries = {entry["id"]: entry for entry in _dataset_index()}
-            selected = entries.get(dataset_id)
-            if selected:
-                return {"out": selected}, data
-        return {"out": {"datasetId": dataset_id, "datasetName": dataset_name}}, data
-
-    if node_type == "model_hub":
-        model_id = data.get("modelId")
-        return {"out": {"modelId": model_id}}, data
-
-    if node_type == "image_classifier":
-        image = inputs.get("image")
-        model = inputs.get("model")
-        classification = {
-            "label": "unknown",
-            "confidence": 0.0,
-            "model": model,
-            "notes": "Placeholder classification result.",
-            "received": bool(image),
+    def __init__(self, definition: WorkflowDefinition) -> None:
+        self.definition = definition
+        self.nodes = {node.id: node for node in definition.nodes}
+        self.node_outputs: Dict[str, Dict[str, Any]] = {}
+        self.node_states: Dict[str, WorkflowRunNode] = {
+            node.id: WorkflowRunNode(
+                id=node.id,
+                type=node.type,
+                x=node.position.x,
+                y=node.position.y,
+                data=dict(node.data),
+                status="pending",
+            )
+            for node in definition.nodes
         }
-        return {"out": classification}, data
+        self.adjacency: Dict[str, List[str]] = defaultdict(list)
+        self.incoming_edges: Dict[str, List[WorkflowEdge]] = defaultdict(list)
+        self._build_graph(definition.edges)
 
-    if node_type == "decision_logic":
-        condition = data.get("condition") or "bool(input)"
-        input_value = inputs.get("in")
-        context = {"input": input_value}
-        try:
-            decision = bool(eval(condition, {"__builtins__": {}}, context))  # noqa: S307
-        except Exception as exc:  # pylint: disable=broad-except
-            LOGGER.warning("Decision node %s failed to evaluate condition '%s': %s", node.id, condition, exc)
-            decision = bool(input_value)
-        data["decision"] = decision
-        return {"true": input_value if decision else None, "false": None if decision else input_value}, data
+    def _build_graph(self, edges: List[WorkflowEdge]) -> None:
+        indegree = defaultdict(int)
+        for node_id in self.nodes:
+            indegree[node_id] = 0
 
-    if node_type == "generate_report":
-        prompt_template = data.get("prompt") or "Generate a concise report based on the provided data."
-        upstream = inputs.get("in")
-        context_snippet = json.dumps(upstream, ensure_ascii=False, indent=2) if upstream is not None else "No upstream data provided."
-        prompt = f"{prompt_template}\n\nContext:\n{context_snippet}"
-        report = _gemini_generate(prompt)
-        data["report"] = report
-        return {"out": report}, data
+        for edge in edges:
+            if edge.fromNode not in self.nodes or edge.toNode not in self.nodes:
+                raise HTTPException(status_code=400, detail=f"Edge {edge.id} references unknown nodes")
+            self.adjacency[edge.fromNode].append(edge.toNode)
+            self.incoming_edges[edge.toNode].append(edge)
+            indegree[edge.toNode] += 1
 
-    if node_type in {"image_output", "text_output"}:  # Future extension
-        return {"out": inputs}, data
+        queue: deque[str] = deque([node_id for node_id, degree in indegree.items() if degree == 0])
+        if not queue and self.nodes:
+            raise HTTPException(status_code=400, detail="Workflow has no entry nodes (cycle detected)")
 
-    # Default passthrough
-    return inputs, data
+        execution_order: List[str] = []
+        while queue:
+            current = queue.popleft()
+            execution_order.append(current)
+            for neighbor in self.adjacency[current]:
+                indegree[neighbor] -= 1
+                if indegree[neighbor] == 0:
+                    queue.append(neighbor)
+
+        if len(execution_order) != len(self.nodes):
+            raise HTTPException(status_code=400, detail="Workflow contains cycles and cannot be executed")
+
+        self.execution_order = execution_order
+
+    def run(self) -> WorkflowRunResponse:
+        for node_id in self.execution_order:
+            node = self.nodes[node_id]
+            state = self.node_states[node_id]
+            state.status = "running"
+            inputs = self._collect_inputs(node_id)
+            try:
+                outputs, updated_data = self._execute_node(node, inputs)
+                state.data = updated_data
+                state.status = "done"
+                self.node_outputs[node_id] = outputs
+                LOGGER.info("Executed node %s (%s)", node.id, node.type)
+            except Exception as exc:  # pylint: disable=broad-except
+                state.status = "failed"
+                state.data = {**state.data, "error": str(exc)}
+                self.node_outputs[node_id] = {}
+                LOGGER.exception("Node %s failed: %s", node.id, exc)
+
+        ordered_nodes = [self.node_states[node.id] for node in self.definition.nodes]
+        return WorkflowRunResponse(nodes=ordered_nodes)
+
+    def _collect_inputs(self, node_id: str) -> Dict[str, Any]:
+        inputs: Dict[str, Any] = {}
+        for edge in self.incoming_edges.get(node_id, []):
+            upstream_outputs = self.node_outputs.get(edge.fromNode, {})
+            if edge.fromPort in upstream_outputs:
+                inputs[edge.toPort] = upstream_outputs[edge.fromPort]
+        return inputs
+
+    def _execute_node(self, node: WorkflowNode, inputs: Dict[str, Any]) -> tuple[Dict[str, Any], Dict[str, Any]]:
+        """Placeholder node execution logic."""
+
+        data = dict(node.data)
+        if node.type == "generate_report":
+            report = "Generated placeholder report from workflow executor."
+            if inputs:
+                report += f"\n\nInputs: {json.dumps(inputs, ensure_ascii=False)}"
+            data["report"] = report
+            return {"out": report}, data
+
+        if node.type == "decision_logic":
+            condition = data.get("condition", "bool(input)")
+            input_value = inputs.get("in")
+            local_vars = {"input": input_value}
+            try:
+                decision = bool(eval(condition, {"__builtins__": {}}, local_vars))  # noqa: S307
+            except Exception as exc:  # pylint: disable=broad-except
+                LOGGER.warning("Decision node %s failed to evaluate condition '%s': %s", node.id, condition, exc)
+                decision = bool(input_value)
+            data["decision"] = decision
+            return {"true": input_value if decision else None, "false": None if decision else input_value}, data
+
+        if node.type in {"image_input", "text_input", "data_hub", "model_hub"}:
+            return {"out": data}, data
+
+        if node.type == "image_classifier":
+            result = {
+                "label": "unknown",
+                "confidence": 0.0,
+                "received": bool(inputs.get("image")),
+                "model": inputs.get("model"),
+            }
+            data["classification"] = result
+            return {"out": result}, data
+
+        # Default passthrough behaviour for any other node types
+        return inputs or {"out": data}, data
 
 
 @app.post("/api/v1/workflow/run", response_model=WorkflowRunResponse)
 def run_workflow(definition: WorkflowDefinition) -> WorkflowRunResponse:
-    nodes_map = {node.id: node for node in definition.nodes}
-    for edge in definition.edges:
-        if edge.fromNode not in nodes_map or edge.toNode not in nodes_map:
-            raise HTTPException(status_code=400, detail=f"Edge {edge.id} references unknown nodes")
+    if not definition.nodes:
+        raise HTTPException(status_code=400, detail="Workflow must contain at least one node")
 
-    adjacency: Dict[str, List[str]] = defaultdict(list)
-    indegree: Dict[str, int] = {node_id: 0 for node_id in nodes_map}
-    incoming_edges: Dict[str, List[WorkflowEdgePayload]] = defaultdict(list)
-
-    for edge in definition.edges:
-        adjacency[edge.fromNode].append(edge.toNode)
-        indegree[edge.toNode] += 1
-        incoming_edges[edge.toNode].append(edge)
-
-    queue: deque[str] = deque([node_id for node_id, degree in indegree.items() if degree == 0])
-    if not queue and nodes_map:
-        raise HTTPException(status_code=400, detail="Workflow has no entry nodes (cycle detected)")
-
-    execution_order: List[str] = []
-    while queue:
-        current = queue.popleft()
-        execution_order.append(current)
-        for neighbor in adjacency[current]:
-            indegree[neighbor] -= 1
-            if indegree[neighbor] == 0:
-                queue.append(neighbor)
-
-    if len(execution_order) != len(nodes_map):
-        raise HTTPException(status_code=400, detail="Workflow contains cycles and cannot be executed")
-
-    node_outputs: Dict[str, Dict[str, Any]] = {}
-    response_nodes: Dict[str, WorkflowRunResponseNode] = {}
-
-    nodes_state: Dict[str, Dict[str, Any]] = {
-        node.id: {
-            "id": node.id,
-            "type": node.type,
-            "x": node.position.x,
-            "y": node.position.y,
-            "data": dict(node.data),
-            "status": "pending",
-        }
-        for node in definition.nodes
-    }
-
-    for node_id in execution_order:
-        node_payload = nodes_map[node_id]
-        node_state = nodes_state[node_id]
-        start_time = time.time()
-        inputs = _gather_inputs(node_id, incoming_edges, node_outputs)
-        try:
-            outputs, updated_data = _execute_node(node_payload, node_state.get("data", {}), inputs)
-            node_state["data"] = updated_data
-            node_state["status"] = "done"
-            node_outputs[node_id] = outputs
-            elapsed = (time.time() - start_time) * 1000
-            LOGGER.info("Node %s (%s) executed in %.2fms", node_id, node_payload.type, elapsed)
-        except Exception as exc:  # pylint: disable=broad-except
-            node_state["status"] = "failed"
-            node_state.setdefault("data", {})["error"] = str(exc)
-            node_outputs[node_id] = {}
-            LOGGER.exception("Node %s (%s) failed: %s", node_id, node_payload.type, exc)
-
-        response_nodes[node_id] = WorkflowRunResponseNode(**node_state)  # type: ignore[arg-type]
-
-    ordered_response_nodes = [response_nodes[node.id] for node in definition.nodes]
-    return WorkflowRunResponse(nodes=ordered_response_nodes)
+    executor = WorkflowExecutor(definition)
+    return executor.run()

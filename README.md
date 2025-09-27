@@ -4,7 +4,7 @@
 
 # Run and deploy your AI Studio app
 
-This repository now contains a minimal FastAPI backend with a React/Vite front-end for orchestrating multimodal workflows. The backend provides dataset and workflow management APIs as well as a stubbed execution engine that proxies Gemini report generation securely on the server.
+This repository now contains a minimal FastAPI backend with a React/Vite front-end for orchestrating multimodal workflows. The backend provides dataset and workflow management APIs as well as a stubbed execution engine that produces placeholder outputs server-side so the UI can visualise runs without external dependencies.
 
 ## Prerequisites
 
@@ -18,12 +18,7 @@ This repository now contains a minimal FastAPI backend with a React/Vite front-e
    ```bash
    pip install -r requirements.txt
    ```
-2. Configure environment variables by creating a `.env` file in the project root:
-   ```env
-   GEMINI_API_KEY=your_api_key_here  # Optional but required for real Gemini responses
-   GEMINI_MODEL=gemini-1.5-flash     # Optional override
-   ```
-3. Run the API server:
+2. Run the API server:
    ```bash
    uvicorn main:app --host 0.0.0.0 --port 8000 --reload
    ```
@@ -51,7 +46,7 @@ Uploaded datasets and workflow definitions are stored under `storage/datasets/` 
    npm run dev
    ```
 
-The app runs on `http://localhost:3000` and proxies `/api` requests to the backend (`http://localhost:8000` by default). The frontend no longer requires direct access to the Gemini API key; all Gemini calls are handled server-side.
+The app runs on `http://localhost:3000` and proxies `/api` requests to the backend (`http://localhost:8000` by default).
 
 ## Run with Docker Compose
 
