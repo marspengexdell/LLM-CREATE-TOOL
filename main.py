@@ -905,7 +905,15 @@ class WorkflowExecutor:
         """Placeholder node execution logic."""
 
         data = dict(node.data)
-        if node.type == "generate_report":
+        node_type_normalized = (
+            node.type.replace("-", "_").replace(" ", "_").lower()
+        )
+
+        if node_type_normalized == "generatereport":
+            # Support potential camelCase variants coming from the UI.
+            node_type_normalized = "generate_report"
+
+        if node_type_normalized == "generate_report":
 codex/rewrite-backend-using-fastapi-and-implement-routes-k68a2h
             prompt = data.get("prompt") or "Summarise the provided workflow inputs into a concise report."
             model_name = data.get("modelId") or data.get("model") or "gemini-1.5-flash"
@@ -975,6 +983,244 @@ main
             }
             data["classification"] = result
             return {"out": result}, data
+
+        # ------------------------------------------------------------------
+        # Experimental training pipeline nodes
+        # ------------------------------------------------------------------
+
+        if "dataset" in node_type_normalized and (
+            "prep" in node_type_normalized
+            or "clean" in node_type_normalized
+            or "curat" in node_type_normalized
+        ):
+            dataset_source = None
+            for key in ("preparedDataset", "dataset", "in", "out"):
+                if key in inputs and inputs[key]:
+                    dataset_source = inputs[key]
+                    break
+
+            timestamp = int(time.time())
+            records_processed = data.get("recordsProcessed") or 2048
+            processed_dataset = {
+                "status": "prepared",
+                "recordsProcessed": records_processed,
+                "recordsRetained": data.get("recordsRetained", int(records_processed * 0.92)),
+                "lastUpdated": timestamp,
+                "sourcePreview": dataset_source,
+            }
+            data.update(
+                {
+                    "processedDataset": processed_dataset,
+                    "progress": {
+                        "steps": [
+                            "deduplicated",
+                            "filtered low-quality samples",
+                            "normalised schema",
+                        ],
+                        "recordsProcessed": records_processed,
+                        "timestamp": timestamp,
+                    },
+                }
+            )
+
+            outputs = {
+                "out": processed_dataset,
+                "dataset": processed_dataset,
+                "preparedDataset": processed_dataset,
+            }
+            return outputs, data
+
+        if "token" in node_type_normalized:
+            dataset_source = None
+            for key in ("tokenizedDataset", "preparedDataset", "dataset", "in", "out"):
+                if key in inputs and inputs[key]:
+                    dataset_source = inputs[key]
+                    break
+
+            batches = data.get("batches") or 8
+            tokens_per_batch = data.get("tokensPerBatch") or 32768
+            total_tokens = data.get("tokenCount") or batches * tokens_per_batch
+            timestamp = int(time.time())
+            tokenized_dataset = {
+                "status": "tokenized",
+                "tokenCount": total_tokens,
+                "batches": batches,
+                "lastBatchTokens": tokens_per_batch,
+                "updatedAt": timestamp,
+                "source": dataset_source,
+            }
+            data.update(
+                {
+                    "tokenizedDataset": tokenized_dataset,
+                    "tokenizer": data.get("tokenizer") or "sentencepiece",
+                    "tokenCount": total_tokens,
+                    "progress": {
+                        "batchesCompleted": batches,
+                        "tokensProcessed": total_tokens,
+                        "timestamp": timestamp,
+                    },
+                }
+            )
+
+            outputs = {
+                "out": tokenized_dataset,
+                "tokens": tokenized_dataset,
+                "tokenizedDataset": tokenized_dataset,
+            }
+            return outputs, data
+
+        if "lora" in node_type_normalized and (
+            "train" in node_type_normalized or "fine" in node_type_normalized
+        ):
+            base_model = inputs.get("model") or inputs.get("baseModel")
+            dataset_source = (
+                inputs.get("tokenizedDataset")
+                or inputs.get("dataset")
+                or inputs.get("preparedDataset")
+            )
+            timestamp = int(time.time())
+            checkpoint_dir = f"runs/{self.run_id}/{node.id}"
+            checkpoint_path = f"{checkpoint_dir}/checkpoint-epoch-1.safetensors"
+            metrics = {
+                "loss": data.get("loss", 1.87),
+                "learningRate": data.get("learningRate", 1e-4),
+                "epochsCompleted": data.get("epochs", 1),
+            }
+            lora_weights = {
+                "adapterPath": checkpoint_path,
+                "baseModel": base_model,
+                "dataset": dataset_source,
+                "metrics": metrics,
+                "updatedAt": timestamp,
+            }
+            data.update(
+                {
+                    "loraWeights": lora_weights,
+                    "checkpointPath": checkpoint_path,
+                    "trainingMetrics": metrics,
+                    "progress": {
+                        "epochsCompleted": metrics["epochsCompleted"],
+                        "latestLoss": metrics["loss"],
+                        "timestamp": timestamp,
+                    },
+                }
+            )
+
+            outputs = {
+                "out": lora_weights,
+                "loraWeights": lora_weights,
+                "checkpointPath": checkpoint_path,
+            }
+            return outputs, data
+
+        if "lora" in node_type_normalized and "merge" in node_type_normalized:
+            base_model = inputs.get("model") or inputs.get("baseModel")
+            lora_weights = inputs.get("loraWeights") or inputs.get("out")
+            timestamp = int(time.time())
+            merged_path = f"runs/{self.run_id}/{node.id}/merged-model.safetensors"
+            merged_model = {
+                "artifactPath": merged_path,
+                "baseModel": base_model,
+                "loraWeights": lora_weights,
+                "mergedAt": timestamp,
+            }
+            data.update(
+                {
+                    "mergedModel": merged_model,
+                    "mergeSummary": {
+                        "layersMerged": data.get("layersMerged", "all"),
+                        "timestamp": timestamp,
+                    },
+                }
+            )
+
+            outputs = {
+                "out": merged_model,
+                "model": merged_model,
+                "mergedModel": merged_model,
+            }
+            return outputs, data
+
+        if "quant" in node_type_normalized:
+            source_model = (
+                inputs.get("quantizedModel")
+                or inputs.get("model")
+                or inputs.get("mergedModel")
+                or inputs.get("out")
+            )
+            bits = data.get("bits") or 4
+            timestamp = int(time.time())
+            artifact_path = f"runs/{self.run_id}/{node.id}/model-int{bits}.gguf"
+            quantized_model = {
+                "artifactPath": artifact_path,
+                "dtype": f"int{bits}",
+                "source": source_model,
+                "quantizationScheme": data.get("scheme") or "nf4",
+                "quantizedAt": timestamp,
+            }
+            data.update(
+                {
+                    "quantizedModel": quantized_model,
+                    "progress": {
+                        "bits": bits,
+                        "scheme": quantized_model["quantizationScheme"],
+                        "timestamp": timestamp,
+                    },
+                }
+            )
+
+            outputs = {
+                "out": quantized_model,
+                "quantizedModel": quantized_model,
+                "model": quantized_model,
+            }
+            return outputs, data
+
+        if "eval" in node_type_normalized or "metric" in node_type_normalized:
+            subject_model = (
+                inputs.get("model")
+                or inputs.get("quantizedModel")
+                or inputs.get("mergedModel")
+                or inputs.get("out")
+            )
+            dataset_source = (
+                inputs.get("dataset")
+                or inputs.get("preparedDataset")
+                or inputs.get("tokenizedDataset")
+            )
+            timestamp = int(time.time())
+            metrics = data.get("metrics") or {
+                "accuracy": 0.71,
+                "perplexity": 12.4,
+                "throughputSamplesPerSec": 18.2,
+            }
+            eval_report = {
+                "model": subject_model,
+                "dataset": dataset_source,
+                "metrics": metrics,
+                "generatedAt": timestamp,
+                "summary": data.get(
+                    "summary",
+                    "Evaluation completed with placeholder metrics for preview.",
+                ),
+            }
+            data.update(
+                {
+                    "evalReport": eval_report,
+                    "metrics": metrics,
+                    "progress": {
+                        "status": "completed",
+                        "timestamp": timestamp,
+                    },
+                }
+            )
+
+            outputs = {
+                "out": eval_report,
+                "evalReport": eval_report,
+                "metrics": metrics,
+            }
+            return outputs, data
 
         # Default passthrough behaviour for any other node types
         return inputs or {"out": data}, data
