@@ -20,6 +20,13 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
+try:  # Optional import to allow unit tests without the dependency installed.
+    import google.generativeai as genai  # type: ignore
+    from google.api_core.exceptions import GoogleAPIError  # type: ignore
+except Exception:  # pragma: no cover - fallback when package missing during import
+    genai = None  # type: ignore
+    GoogleAPIError = Exception  # type: ignore
+
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -60,6 +67,24 @@ if not LOGGER.handlers:
     file_handler = logging.FileHandler(LOGS_DIR / "backend.log")
     file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
     LOGGER.addHandler(file_handler)
+
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_DEFAULT_MODEL = os.getenv("GEMINI_DEFAULT_MODEL", "gemini-1.5-flash")
+_GEMINI_CONFIGURED = False
+
+if genai is None:
+    LOGGER.warning("google-generativeai package is unavailable; Gemini functionality is disabled.")
+else:
+    if GEMINI_API_KEY:
+        try:
+            genai.configure(api_key=GEMINI_API_KEY)
+            _GEMINI_CONFIGURED = True
+            LOGGER.info("Gemini client configured successfully.")
+        except Exception as exc:  # pylint: disable=broad-except
+            LOGGER.error("Failed to configure Gemini client: %s", exc)
+    else:
+        LOGGER.warning("GEMINI_API_KEY is not set; Gemini functionality is disabled.")
 
 # ---------------------------------------------------------------------------
 # FastAPI setup
@@ -171,6 +196,49 @@ def _detect_mime_type(extension: str) -> str:
         ".csv": "text/csv",
     }
     return mapping.get(extension.lower(), "application/octet-stream")
+
+
+def _format_inputs_for_prompt(inputs: Dict[str, Any]) -> str:
+    if not inputs:
+        return "No inputs were provided."
+    try:
+        return json.dumps(inputs, ensure_ascii=False, indent=2, default=str)
+    except TypeError:
+        serialisable = {key: repr(value) for key, value in inputs.items()}
+        return json.dumps(serialisable, ensure_ascii=False, indent=2)
+
+
+def _generate_gemini_report(model_id: str, prompt: str) -> str:
+    if genai is None or not _GEMINI_CONFIGURED:
+        raise RuntimeError("Gemini client is not configured. Please set the GEMINI_API_KEY environment variable.")
+
+    try:
+        model = genai.GenerativeModel(model_id)
+        response = model.generate_content(prompt)
+    except GoogleAPIError as exc:  # type: ignore[arg-type]
+        raise RuntimeError(f"Gemini API error: {exc}") from exc
+    except Exception as exc:  # pylint: disable=broad-except
+        raise RuntimeError(f"Gemini request failed: {exc}") from exc
+
+    text_response = getattr(response, "text", None)
+    if text_response:
+        return text_response.strip()
+
+    candidate_texts: List[str] = []
+    for candidate in getattr(response, "candidates", []) or []:
+        content = getattr(candidate, "content", None)
+        parts = getattr(content, "parts", None) if content else None
+        if not parts:
+            continue
+        for part in parts:
+            part_text = getattr(part, "text", None)
+            if part_text:
+                candidate_texts.append(part_text)
+
+    if candidate_texts:
+        return "\n".join(candidate_texts).strip()
+
+    raise RuntimeError("Gemini response did not contain any text output.")
 
 
 # ---------------------------------------------------------------------------
@@ -384,10 +452,27 @@ class WorkflowExecutor:
 
         data = dict(node.data)
         if node.type == "generate_report":
-            report = "Generated placeholder report from workflow executor."
-            if inputs:
-                report += f"\n\nInputs: {json.dumps(inputs, ensure_ascii=False)}"
+            prompt = data.get(
+                "prompt",
+                "Generate a detailed report that summarises the provided workflow inputs.",
+            )
+            context = data.get("context")
+            formatted_inputs = _format_inputs_for_prompt(inputs)
+            prompt_sections = [prompt]
+            if context:
+                prompt_sections.append(str(context))
+            prompt_sections.extend(["Workflow inputs:", formatted_inputs])
+            final_prompt = "\n\n".join(prompt_sections)
+
+            model_id = data.get("model") or data.get("modelId") or GEMINI_DEFAULT_MODEL
+            try:
+                report = _generate_gemini_report(model_id, final_prompt)
+            except Exception as exc:  # pylint: disable=broad-except
+                raise RuntimeError(f"Gemini report generation failed: {exc}") from exc
+
             data["report"] = report
+            data["model"] = model_id
+            data["aggregated_inputs"] = formatted_inputs
             return {"out": report}, data
 
         if node.type == "decision_logic":
