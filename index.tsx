@@ -389,6 +389,7 @@ const App = () => {
     const [draggedItem, setDraggedItem] = useState(null);
     const [connectionPreview, setConnectionPreview] = useState(null);
     const [modalState, setModalState] = useState({ isOpen: false, type: null, nodeId: null });
+    const [lastRunId, setLastRunId] = useState(null);
     
     const canvasRef = useRef(null);
 
@@ -633,12 +634,19 @@ const App = () => {
             const result = await response.json();
             // Update nodes with the final state from the backend
             setNodes(result.nodes);
+            if (result.run_id) {
+                setLastRunId(result.run_id);
+                console.log(`Workflow run ${result.run_id} completed`);
+            } else {
+                setLastRunId(null);
+            }
 
         } catch (error) {
             console.error('Failed to run workflow:', error);
             alert(`Error: ${error.message}`);
             // Revert status to idle on failure
             setNodes(prev => prev.map(n => ({...n, status: 'idle'})));
+            setLastRunId(null);
         }
     };
     
@@ -683,6 +691,9 @@ const App = () => {
                     onDrop={handleDrop}
                 >
                     <Toolbar onRun={runWorkflow} onSave={handleSaveWorkflow} onLoad={() => openModal('load_workflow')} onClear={clearCanvas} />
+                    {lastRunId && (
+                        <div className="run-status">Last run ID: {lastRunId}</div>
+                    )}
                     <svg className="edge-layer">
                         {edges.map(edge => {
                            const fromNode = nodes.find(n => n.id === edge.fromNode);
