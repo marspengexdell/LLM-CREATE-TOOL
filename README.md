@@ -122,6 +122,25 @@ Ensure your production environment provides the same required variables—especi
 - Frontend production builds can be created with `npm run build` and served via a static host or reverse proxy (e.g., Nginx) that forwards `/api` traffic to the backend service.
 - Persist the `storage/` directory in production to retain datasets, workflows, and logs.
 
+## Continuous integration
+
+A GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every push and pull request to keep the repository healthy:
+
+- Node.js 20 is provisioned, `npm ci` installs dependencies, and the frontend must pass `npm run lint` (TypeScript type-checking) and `npm run test` (a production Vite build).
+- Python 3.11 is provisioned, `pip` installs the dependencies defined in `requirements-dev.txt`, and the backend must pass `pytest`.
+- Dependency installs for both runtimes are cached automatically to speed up subsequent runs.
+- Coverage and other build artefacts are uploaded when generated so they are easy to inspect from a workflow run.
+- When the workflow runs on the `main` branch or a tagged release (and not for pull requests), Docker images for the backend and frontend are built and pushed to GitHub Container Registry using the repository's `GITHUB_TOKEN`.
+
+Before opening a pull request, run the same commands locally so CI succeeds:
+
+```bash
+npm run lint
+npm run test
+python -m pip install -r requirements-dev.txt
+pytest
+```
+
 ## Smoke tests
 
 After completing the backend setup, ensure the API is running at `http://localhost:8000`. The commands below assume `curl` (and optionally [`jq`](https://stedolan.github.io/jq/)) is available on your PATH.
