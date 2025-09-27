@@ -39,7 +39,11 @@ except Exception:  # pragma: no cover - optional dependency
     pynvml = None  # type: ignore
 
 main
+codex/integrate-pydantic-models-and-api-routes
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+
 from fastapi import Body, FastAPI, File, HTTPException, Request, UploadFile
+ main
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -82,6 +86,8 @@ DATASET_METADATA_FILENAME = "metadata.json"
 MAX_CONTEXT_SNIPPET_CHARS = 4000
 
 main
+
+TRAINING_STATE_PATH = STORAGE_DIR / "training_state.json"
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -530,6 +536,40 @@ class WorkflowRunResponse(BaseModel):
     nodes: List[WorkflowRunNode]
 
 
+codex/integrate-pydantic-models-and-api-routes
+class TrainingStartRequest(BaseModel):
+    dataset_id: str = Field(..., alias="datasetId")
+    model_id: str = Field(..., alias="modelId")
+    hyperparameters: Dict[str, Any] = Field(default_factory=dict)
+    notes: Optional[str] = None
+
+    class Config:
+        allow_population_by_field_name = True
+
+
+class TrainingStatusResponse(BaseModel):
+    job_id: str = Field(..., alias="jobId")
+    dataset_id: str = Field(..., alias="datasetId")
+    model_id: str = Field(..., alias="modelId")
+    status: str
+    progress: float = Field(..., ge=0.0, le=1.0)
+    gpu_memory_mb: Optional[int] = Field(None, alias="gpuMemoryMB")
+    log_tail: List[str] = Field(default_factory=list, alias="logTail")
+    submitted_at: str = Field(..., alias="submittedAt")
+    started_at: Optional[str] = Field(None, alias="startedAt")
+    completed_at: Optional[str] = Field(None, alias="completedAt")
+    parameters: Dict[str, Any] = Field(default_factory=dict)
+
+    class Config:
+        allow_population_by_field_name = True
+
+
+class TrainingAbortRequest(BaseModel):
+    job_id: Optional[str] = Field(None, alias="jobId")
+
+    class Config:
+        allow_population_by_field_name = True
+
 class TrainStartRequest(BaseModel):
     steps: int = Field(20, ge=1, le=10_000)
     description: Optional[str] = None
@@ -552,6 +592,7 @@ class TrainStatusResponse(BaseModel):
 
 class TrainAbortRequest(BaseModel):
     runId: str
+main
 
 
 # ---------------------------------------------------------------------------
@@ -725,6 +766,203 @@ def _generate_gemini_report(model_id: str, prompt: str) -> str:
 
     raise RuntimeError("Gemini response did not contain any text output.")
 main
+
+
+# ---------------------------------------------------------------------------
+# Training controller
+# ---------------------------------------------------------------------------
+
+
+class TrainingController:
+    """Simple controller that tracks the lifecycle of a single training job."""
+
+    def __init__(self, state_path: Path, logger: logging.Logger) -> None:
+        self._state_path = state_path
+        self._logger = logger
+        self._lock = threading.Lock()
+        self._state = self._load_state()
+
+    @staticmethod
+    def _now_iso() -> str:
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    def _default_state(self) -> Dict[str, Any]:
+        return {"jobs": {}, "active_job_id": None}
+
+    def _load_state(self) -> Dict[str, Any]:
+        state = _load_json(self._state_path, self._default_state())
+        if not isinstance(state, dict):
+            state = self._default_state()
+        state.setdefault("jobs", {})
+        state.setdefault("active_job_id", None)
+        return state
+
+    def _refresh_state(self) -> None:
+        self._state = self._load_state()
+
+    def _persist_state(self) -> None:
+        _save_json(self._state_path, self._state)
+
+    @staticmethod
+    def _append_log(job: Dict[str, Any], message: str) -> None:
+        logs = job.setdefault("logTail", [])
+        if message not in logs:
+            logs.append(message)
+
+    def _simulate_progress(self, job: Dict[str, Any]) -> None:
+        if job.get("status") != "running":
+            return
+
+        started_epoch = job.get("_startedAtEpoch")
+        if started_epoch is None:
+            started_iso = job.get("startedAt") or job.get("submittedAt")
+            try:
+                started_epoch = time.mktime(time.strptime(str(started_iso), "%Y-%m-%dT%H:%M:%SZ"))
+            except (TypeError, ValueError):
+                started_epoch = time.time()
+            job["_startedAtEpoch"] = started_epoch
+
+        elapsed = max(0.0, time.time() - float(started_epoch))
+        simulated_duration = 60.0
+        progress = min(1.0, elapsed / simulated_duration)
+        job["progress"] = progress
+        job["gpuMemoryMB"] = job.get("gpuMemoryMB") or 6144
+        self._append_log(job, "Training job is running.")
+
+        if progress >= 1.0:
+            job["status"] = "completed"
+            job["completedAt"] = job.get("completedAt") or self._now_iso()
+            self._append_log(job, "Training completed successfully.")
+            if self._state.get("active_job_id") == job.get("jobId"):
+                self._state["active_job_id"] = None
+
+    def _sanitise_job(self, job: Dict[str, Any]) -> Dict[str, Any]:
+        payload = {key: value for key, value in job.items() if not key.startswith("_")}
+        payload.setdefault("progress", 0.0)
+        payload.setdefault("gpuMemoryMB", None)
+        payload.setdefault("logTail", [])
+        payload.setdefault("parameters", {})
+        return payload
+
+    def _build_response(self, job: Dict[str, Any]) -> TrainingStatusResponse:
+        payload = self._sanitise_job(job)
+        return TrainingStatusResponse.parse_obj(payload)
+
+    def start(self, request: TrainingStartRequest) -> TrainingStatusResponse:
+        with self._lock:
+            self._refresh_state()
+            active_job_id = self._state.get("active_job_id")
+            if active_job_id:
+                active_job = self._state.get("jobs", {}).get(active_job_id)
+                if active_job and active_job.get("status") in {"queued", "running"}:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=_error_detail(
+                            "A training job is already running.",
+                            error_code="TRAINING_JOB_ACTIVE",
+                            details={"jobId": active_job_id},
+                        ),
+                    )
+
+            job_id = str(uuid4())
+            submitted_at = self._now_iso()
+            job: Dict[str, Any] = {
+                "jobId": job_id,
+                "datasetId": request.dataset_id,
+                "modelId": request.model_id,
+                "parameters": dict(request.hyperparameters),
+                "notes": request.notes,
+                "status": "running",
+                "progress": 0.0,
+                "gpuMemoryMB": None,
+                "logTail": ["Training job submitted.", "Initialising training run..."],
+                "submittedAt": submitted_at,
+                "startedAt": submitted_at,
+                "completedAt": None,
+                "_startedAtEpoch": time.time(),
+            }
+
+            self._state.setdefault("jobs", {})[job_id] = job
+            self._state["active_job_id"] = job_id
+            self._persist_state()
+            self._logger.info(
+                "Training job %s started with dataset %s and model %s", job_id, request.dataset_id, request.model_id
+            )
+            return self._build_response(job)
+
+    def status(self, job_id: Optional[str]) -> TrainingStatusResponse:
+        with self._lock:
+            self._refresh_state()
+            target_job_id = job_id or self._state.get("active_job_id")
+            if not target_job_id:
+                raise HTTPException(
+                    status_code=404,
+                    detail=_error_detail(
+                        "No training job is currently active.",
+                        error_code="TRAINING_JOB_NOT_FOUND",
+                    ),
+                )
+
+            job = self._state.get("jobs", {}).get(target_job_id)
+            if not job:
+                raise HTTPException(
+                    status_code=404,
+                    detail=_error_detail(
+                        "Training job not found.",
+                        error_code="TRAINING_JOB_NOT_FOUND",
+                        details={"jobId": target_job_id},
+                    ),
+                )
+
+            self._simulate_progress(job)
+            self._state["jobs"][target_job_id] = job
+            self._persist_state()
+            return self._build_response(job)
+
+    def abort(self, job_id: Optional[str]) -> TrainingStatusResponse:
+        with self._lock:
+            self._refresh_state()
+            target_job_id = job_id or self._state.get("active_job_id")
+            if not target_job_id:
+                raise HTTPException(
+                    status_code=404,
+                    detail=_error_detail(
+                        "No training job is currently active.",
+                        error_code="TRAINING_JOB_NOT_FOUND",
+                    ),
+                )
+
+            job = self._state.get("jobs", {}).get(target_job_id)
+            if not job:
+                raise HTTPException(
+                    status_code=404,
+                    detail=_error_detail(
+                        "Training job not found.",
+                        error_code="TRAINING_JOB_NOT_FOUND",
+                        details={"jobId": target_job_id},
+                    ),
+                )
+
+            self._simulate_progress(job)
+
+            if job.get("status") in {"completed", "aborted"}:
+                return self._build_response(job)
+
+            job["status"] = "aborted"
+            job["completedAt"] = self._now_iso()
+            job["progress"] = min(1.0, float(job.get("progress", 0.0)))
+            self._append_log(job, "Training aborted by user request.")
+
+            if self._state.get("active_job_id") == target_job_id:
+                self._state["active_job_id"] = None
+
+            self._state["jobs"][target_job_id] = job
+            self._persist_state()
+            self._logger.info("Training job %s aborted by request.", target_job_id)
+            return self._build_response(job)
+
+
+TRAINING_CONTROLLER = TrainingController(TRAINING_STATE_PATH, LOGGER)
 
 
 # ---------------------------------------------------------------------------
@@ -940,6 +1178,32 @@ def save_workflow(definition: WorkflowDefinition) -> Dict[str, str]:
 
     LOGGER.info("Saved workflow %s", workflow_id)
     return {"id": workflow_id}
+
+
+# ---------------------------------------------------------------------------
+# Training endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/v1/train/start", response_model=TrainingStatusResponse)
+def start_training_job(request: TrainingStartRequest) -> TrainingStatusResponse:
+    """Start a new training job for a dataset/model pair."""
+
+    return TRAINING_CONTROLLER.start(request)
+
+
+@app.get("/api/v1/train/status", response_model=TrainingStatusResponse)
+def get_training_status(job_id: Optional[str] = Query(default=None, alias="jobId")) -> TrainingStatusResponse:
+    """Return the status of the requested or active training job."""
+
+    return TRAINING_CONTROLLER.status(job_id)
+
+
+@app.post("/api/v1/train/abort", response_model=TrainingStatusResponse)
+def abort_training_job(request: TrainingAbortRequest) -> TrainingStatusResponse:
+    """Abort the active training job or the job identified in the payload."""
+
+    return TRAINING_CONTROLLER.abort(request.job_id)
 
 
 # ---------------------------------------------------------------------------
