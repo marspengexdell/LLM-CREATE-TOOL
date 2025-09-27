@@ -93,7 +93,9 @@ The app runs on `http://localhost:3000` and proxies `/api` requests to the backe
 
 ## Run with Docker Compose
 
-To start both services with Docker Compose:
+### Development
+
+To iterate locally with hot-reload enabled, start the stack with the default Compose file:
 
 ```bash
 docker compose up --build
@@ -102,13 +104,194 @@ docker compose up --build
 - Backend: exposed at `http://localhost:8000`
 - Frontend dev server: `http://localhost:3000`
 
-Volumes are mounted for live reloading during development. Provide environment variables through an `.env` file in the project root before running the stack.
+Both services mount the repository directory (`.:/app` in `docker-compose.yml`) so code changes are reflected without rebuilding. Place your development secrets—at minimum `GEMINI_API_KEY=<value>`—in an `.env` file at the project root so the backend container picks them up via the `env_file` directive.
+
+### Production
+
+For production deployments you typically want to run the built images without the development bind mounts. Create a production override (for example, `docker-compose.prod.yml`) that removes the `.:/app` volumes and sets any production-only configuration, or add a `production` profile to your Compose file. Then launch the stack in detached mode:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build -d
+```
+
+Ensure your production environment provides the same required variables—especially `GEMINI_API_KEY`—either through an override `env_file` (such as `.env.production`) or your orchestration platform's secret manager before starting the services.
 
 ## Deployment notes
 
 - Use the FastAPI app (`main:app`) behind a production-ready ASGI server such as Uvicorn or Gunicorn.
 - Frontend production builds can be created with `npm run build` and served via a static host or reverse proxy (e.g., Nginx) that forwards `/api` traffic to the backend service.
 - Persist the `storage/` directory in production to retain datasets, workflows, and logs.
+
+## Smoke tests
+
+After completing the backend setup, ensure the API is running at `http://localhost:8000`. The commands below assume `curl` (and optionally [`jq`](https://stedolan.github.io/jq/)) is available on your PATH.
+
+### Prepare sample assets
+
+```bash
+mkdir -p smoke-tests
+cat <<'EOF' > smoke-tests/dataset.csv
+id,value
+1,example
+EOF
+
+cat <<'EOF' > smoke-tests/workflow.json
+{
+  "name": "Smoke test flow",
+  "description": "Minimal workflow used in README smoke tests.",
+  "nodes": [
+    {
+      "id": "text-input-1",
+      "type": "text_input",
+      "position": {"x": 0, "y": 0},
+      "data": {"text": "Hello from smoke test"}
+    },
+    {
+      "id": "decision-1",
+      "type": "decision",
+      "position": {"x": 240, "y": 0},
+      "data": {"condition": "input != ''"}
+    },
+    {
+      "id": "output-1",
+      "type": "text_output",
+      "position": {"x": 480, "y": 0},
+      "data": {}
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-1",
+      "fromNode": "text-input-1",
+      "fromPort": "out",
+      "toNode": "decision-1",
+      "toPort": "input"
+    },
+    {
+      "id": "edge-2",
+      "fromNode": "decision-1",
+      "fromPort": "true",
+      "toNode": "output-1",
+      "toPort": "in"
+    }
+  ]
+}
+EOF
+```
+
+### API checks
+
+```bash
+# GET /api/v1/models
+curl -sS http://localhost:8000/api/v1/models | jq
+# → [
+#     {
+#       "id": "gemini-1.5-flash",
+#       "name": "Gemini 1.5 Flash",
+#       "description": "Fast multimodal model for interactive workflows."
+#     },
+#     {
+#       "id": "gemini-1.5-pro",
+#       "name": "Gemini 1.5 Pro",
+#       "description": "Higher quality Gemini model suited for complex reasoning tasks."
+#     }
+#   ]
+
+# GET /api/v1/datasets (before upload)
+curl -sS http://localhost:8000/api/v1/datasets | jq
+# → []  # if no datasets have been uploaded yet
+
+# POST /api/v1/datasets/upload
+curl -sS -X POST http://localhost:8000/api/v1/datasets/upload \
+  -F "file=@smoke-tests/dataset.csv" | jq
+# → {
+#     "id": "2f0e8f5c-...",
+#     "name": "dataset.csv",
+#     "filename": "2f0e8f5c-....csv",
+#     "path": "datasets/2f0e8f5c-....csv",
+#     "size": 19,
+#     "type": "text",
+#     "mimeType": "text/csv",
+#     "preview": "id,value\\n1,example\\n",
+#     "uploadedAt": "2024-06-01T12:34:56Z"
+#   }
+
+# GET /api/v1/datasets (after upload)
+curl -sS http://localhost:8000/api/v1/datasets | jq
+# → [
+#     {
+#       "id": "2f0e8f5c-...",
+#       "datasetId": "2f0e8f5c-...",
+#       "name": "dataset.csv",
+#       "storedFilename": "dataset.csv",
+#       "size": 19,
+#       "type": "text",
+#       "mimeType": "text/csv",
+#       "preview": "id,value\\n1,example\\n",
+#       "uploadedAt": "2024-06-01T12:34:56Z",
+#       "storagePath": "storage/datasets/2f0e8f5c-.../dataset.csv"
+#     }
+#   ]
+
+# GET /api/v1/workflows
+curl -sS http://localhost:8000/api/v1/workflows | jq
+# → []  # if no workflows have been saved yet
+
+# POST /api/v1/workflows/save
+curl -sS -X POST http://localhost:8000/api/v1/workflows/save \
+  -H "Content-Type: application/json" \
+  -d @smoke-tests/workflow.json | jq
+# → {
+#     "id": "8b3f6c2d-..."
+#   }
+
+# GET /api/v1/workflows (after save)
+curl -sS http://localhost:8000/api/v1/workflows | jq
+# → [
+#     {
+#       "id": "8b3f6c2d-...",
+#       "name": "Smoke test flow",
+#       "description": "Minimal workflow used in README smoke tests.",
+#       "updatedAt": "2024-06-01T12:35:10Z"
+#     }
+#   ]
+
+# POST /api/v1/workflow/run
+curl -sS -X POST http://localhost:8000/api/v1/workflow/run \
+  -H "Content-Type: application/json" \
+  -d @smoke-tests/workflow.json | jq
+# → {
+#     "run_id": "c7191a80-...",
+#     "nodes": [
+#       {
+#         "id": "text-input-1",
+#         "type": "text_input",
+#         "x": 0.0,
+#         "y": 0.0,
+#         "data": {"text": "Hello from smoke test"},
+#         "status": "done"
+#       },
+#       {
+#         "id": "decision-1",
+#         "type": "decision",
+#         "x": 240.0,
+#         "y": 0.0,
+#         "data": {"condition": "input != ''", "decision": true},
+#         "status": "done"
+#       },
+#       {
+#         "id": "output-1",
+#         "type": "text_output",
+#         "x": 480.0,
+#         "y": 0.0,
+#         "data": {},
+#         "status": "done"
+#       }
+#     ]
+#   }
+```
+
+When you are finished, you can remove the temporary files with `rm -r smoke-tests`.
 
 ## Testing (future work)
 
