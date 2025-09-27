@@ -7,9 +7,9 @@ services:
       dockerfile: Dockerfile.backend
     container_name: workflow_backend
     env_file:
-      - .env # Load environment variables from .env file
+      - .env
     volumes:
-      - .:/app # Mount current directory to container for live-reloading during dev
+      - .:/app
     ports:
       - "8000:8000"
     networks:
@@ -20,8 +20,12 @@ services:
       context: .
       dockerfile: Dockerfile.frontend
     container_name: workflow_frontend
+    environment:
+      - VITE_DEV_SERVER_HOST=0.0.0.0
+    volumes:
+      - .:/app
     ports:
-      - "8080:80" # Map host port 8080 to container port 80
+      - "3000:3000"
     depends_on:
       - backend
     networks:
