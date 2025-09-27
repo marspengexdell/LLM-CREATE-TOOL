@@ -2,6 +2,13 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 
+const DEFAULT_ERROR_MESSAGE = 'Request failed, please retry.';
+
+const handleApiError = (error, fallbackMessage = DEFAULT_ERROR_MESSAGE, context = 'API request failed') => {
+    console.error(context, error);
+    alert(fallbackMessage);
+};
+
 // --- ICONS ---
 const Icons = {
     Architecture: () => <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 21v-1.5a2.25 2.25 0 0 1 2.25-2.25h12a2.25 2.25 0 0 1 2.25 2.25V21m-15-9.75v-1.5a2.25 2.25 0 0 1 2.25-2.25h12a2.25 2.25 0 0 1 2.25 2.25v1.5m-15-9.75V3.75a2.25 2.25 0 0 1 2.25-2.25h12a2.25 2.25 0 0 1 2.25 2.25v1.5" /><path strokeLinecap="round" strokeLinejoin="round" d="M3 12h18M3 17.25h18M3 6.75h18" /></svg>,
@@ -68,8 +75,7 @@ const ModelHubConfigurator = ({ onSelectModel }) => {
                 const data = await response.json();
                 setModels(data);
             } catch (error) {
-                console.error("Failed to fetch models:", error);
-                alert("Could not fetch models from the server.");
+                handleApiError(error, DEFAULT_ERROR_MESSAGE, 'Failed to fetch models');
             } finally {
                 setIsLoading(false);
             }
@@ -114,8 +120,7 @@ const DataHubConfigurator = ({ onSelectDataset }) => {
             const data = await response.json();
             setDatasets(data);
         } catch (error) {
-            console.error("Failed to fetch datasets:", error);
-            alert("Could not fetch datasets from the server.");
+            handleApiError(error, DEFAULT_ERROR_MESSAGE, 'Failed to fetch datasets');
         } finally {
             setIsLoading(false);
         }
@@ -143,8 +148,7 @@ const DataHubConfigurator = ({ onSelectDataset }) => {
             // Refresh dataset list after successful upload
             fetchDatasets();
         } catch (error) {
-             console.error("Failed to upload file:", error);
-             alert("File upload failed.");
+             handleApiError(error, DEFAULT_ERROR_MESSAGE, 'Failed to upload dataset file');
         }
     };
 
@@ -188,8 +192,7 @@ const LoadWorkflowModal = ({ onLoadWorkflow, closeModal }) => {
                 const data = await response.json();
                 setWorkflows(data);
             } catch (error) {
-                console.error(error);
-                alert(error.message);
+                handleApiError(error, DEFAULT_ERROR_MESSAGE, 'Failed to fetch workflows');
             } finally {
                 setIsLoading(false);
             }
@@ -578,8 +581,7 @@ const App = () => {
             }
             alert('Workflow saved successfully!');
         } catch (error) {
-            console.error(error);
-            alert(error.message);
+            handleApiError(error, DEFAULT_ERROR_MESSAGE, 'Failed to save workflow');
         }
     };
 
@@ -598,8 +600,7 @@ const App = () => {
                 throw new Error('Invalid workflow data received from server.');
             }
         } catch (error) {
-            console.error(error);
-            alert(error.message);
+            handleApiError(error, DEFAULT_ERROR_MESSAGE, 'Failed to load workflow');
         }
     };
 
@@ -642,8 +643,7 @@ const App = () => {
             }
 
         } catch (error) {
-            console.error('Failed to run workflow:', error);
-            alert(`Error: ${error.message}`);
+            handleApiError(error, DEFAULT_ERROR_MESSAGE, 'Failed to run workflow');
             // Revert status to idle on failure
             setNodes(prev => prev.map(n => ({...n, status: 'idle'})));
             setLastRunId(null);
