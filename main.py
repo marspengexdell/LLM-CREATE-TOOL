@@ -1779,6 +1779,43 @@ def run_workflow(definition: WorkflowDefinition) -> WorkflowRunResponse:
 # ---------------------------------------------------------------------------
 
 
+@app.post("/train/start", response_model=TrainStartResponse)
+def start_training_job_v2(payload: TrainStartRequest = Body(default=TrainStartRequest())) -> TrainStartResponse:
+    run_id = TRAINING_MANAGER.start_job(steps=payload.steps, description=payload.description)
+    LOGGER.info("Started training run %s", run_id)
+    return TrainStartResponse(runId=run_id)
+
+
+@app.get("/train/status", response_model=TrainStatusResponse)
+def get_training_status_v2(run_id: str = Query(..., alias="runId")) -> TrainStatusResponse:
+    snapshot = TRAINING_MANAGER.get_snapshot(run_id)
+    if snapshot is None:
+        raise HTTPException(
+            status_code=404,
+            detail=_error_detail(
+                "Training run not found.",
+                error_code="TRAINING_RUN_NOT_FOUND",
+                details={"runId": run_id},
+            ),
+        )
+    return TrainStatusResponse(**snapshot)
+
+
+@app.post("/train/abort", response_model=TrainStatusResponse)
+def abort_training_job_v2(payload: TrainAbortRequest) -> TrainStatusResponse:
+    snapshot = TRAINING_MANAGER.abort_job(payload.runId)
+    if snapshot is None:
+        raise HTTPException(
+            status_code=404,
+            detail=_error_detail(
+                "Training run not found.",
+                error_code="TRAINING_RUN_NOT_FOUND",
+                details={"runId": payload.runId},
+            ),
+        )
+    return TrainStatusResponse(**snapshot)
+
+
 @app.post("/api/v1/train/start", response_model=TrainStartResponse)
 def start_training_job(payload: TrainStartRequest = Body(default=TrainStartRequest())) -> TrainStartResponse:
     run_id = TRAINING_MANAGER.start_job(steps=payload.steps, description=payload.description)
