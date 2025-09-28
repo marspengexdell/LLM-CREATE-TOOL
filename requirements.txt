@@ -9,4 +9,4 @@ torch
 transformers
 peft
 bitsandbytes
-lm_eval
+lm-eval
