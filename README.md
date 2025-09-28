@@ -29,9 +29,6 @@ This repository now contains a minimal FastAPI backend with a React/Vite front-e
    ```
 
 3. Run the API server:
-
-2. Run the API server:
- main
    ```bash
    uvicorn main:app --host 0.0.0.0 --port 8000 --reload
    ```
