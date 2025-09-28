@@ -15,6 +15,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, Iterable, List, Tuple
 
+__all__ = ["PipelineError", "PipelineContext", "TrainingPipeline"]
+
+
 try:  # Optional import, tests exercise CPU fallback.
     import bitsandbytes as bnb  # type: ignore
 except Exception:  # pragma: no cover - dependency missing at runtime
@@ -500,7 +503,14 @@ class TrainingPipeline:
             def requires_attention_mask(self):  # pragma: no cover - metadata access
                 return False
 
-        register_model("tiny-quantised", TinyQuantisedLM)
+        try:
+            register_model("tiny-quantised", TinyQuantisedLM)
+        except Exception:
+            # The registry raises if the model already exists; this can legitimately
+            # happen when the evaluator reuses the same Python process for multiple
+            # runs.  The implementation is idempotent so we simply ignore the error
+            # and rely on the original registration.
+            pass
         eval_dataset = {
             "task": "simple-perplexity",
             "dataset": [
