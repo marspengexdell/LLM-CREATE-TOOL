@@ -548,6 +548,11 @@ html, body {
     color: var(--text-secondary-color);
     font-weight: 500;
 }
+.upload-hint {
+    margin: 0.5rem 0 1rem;
+    color: var(--text-secondary-color);
+    font-size: 0.875rem;
+}
 .upload-btn-large {
     padding: 1rem 2rem;
     background-color: #333;
