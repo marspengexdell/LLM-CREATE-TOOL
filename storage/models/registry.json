@@ -1,0 +1,16 @@
+{
+  "test-model": {
+    "modelId": "test-model",
+    "quantizedModel": {
+      "artifactPath": "runs/test-run-893820e4/quantize/model-int4.gguf",
+      "quantizedModelPath": "runs/test-run-893820e4/quantize",
+      "dtype": "int4",
+      "source": null,
+      "quantizationScheme": "nf4",
+      "quantizedAt": 1759048190
+    },
+    "evaluation": null,
+    "publishedAt": 1759048190,
+    "runId": "test-run-893820e4"
+  }
+}
