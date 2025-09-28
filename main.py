@@ -18,11 +18,13 @@ import logging
 import os
 import threading
 import time
+from contextlib import contextmanager
 from collections import defaultdict, deque
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
+from tempfile import NamedTemporaryFile
 
 
 try:  # Optional import to allow unit tests without the dependency installed.
@@ -618,13 +620,74 @@ def _write_dataset_index(entries: List[Dict[str, Any]]) -> None:
 _MODEL_REGISTRY_LOCK = threading.Lock()
 
 
+try:  # pragma: no cover - ``fcntl`` is unavailable on Windows
+    import fcntl  # type: ignore
+except ImportError:  # pragma: no cover - fallback path for non-POSIX platforms
+    fcntl = None  # type: ignore
+
+
+@contextmanager
+def _model_registry_file_lock() -> None:
+    """Provide an inter-process lock around the model registry file."""
+
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    MODELS_INDEX_PATH.touch(exist_ok=True)
+
+    if fcntl is not None:  # pragma: no branch - POSIX happy path
+        with MODELS_INDEX_PATH.open("a+", encoding="utf-8") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        return
+
+    lock_path = MODELS_INDEX_PATH.with_suffix(MODELS_INDEX_PATH.suffix + ".lock")
+    fd = None
+    try:
+        while True:
+            try:
+                fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_RDWR)
+                break
+            except FileExistsError:
+                time.sleep(0.05)
+        try:
+            yield
+        finally:
+            if fd is not None:
+                os.close(fd)
+                fd = None
+            try:
+                os.unlink(lock_path)
+            except FileNotFoundError:
+                pass
+    finally:
+        pass
+
+
 def _model_registry_entries() -> List[Dict[str, Any]]:
     return _load_json(MODELS_INDEX_PATH, [])
 
 
 def _write_model_registry(entries: List[Dict[str, Any]]) -> None:
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    _save_json(MODELS_INDEX_PATH, entries)
+    payload = json.dumps(entries, ensure_ascii=False, indent=2)
+
+    temp_path: Optional[Path] = None
+    with NamedTemporaryFile(
+        "w", dir=str(MODELS_DIR), prefix="index.", suffix=".tmp", delete=False, encoding="utf-8"
+    ) as handle:
+        handle.write(payload)
+        handle.flush()
+        os.fsync(handle.fileno())
+        temp_path = Path(handle.name)
+
+    try:
+        if temp_path is not None:
+            os.replace(temp_path, MODELS_INDEX_PATH)
+    finally:
+        if temp_path is not None and temp_path.exists():
+            temp_path.unlink()
 
 
 def _normalise_model_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
@@ -640,21 +703,23 @@ def _normalise_model_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
 def _register_model_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
     normalised = _normalise_model_entry(entry)
     with _MODEL_REGISTRY_LOCK:
-        entries = _model_registry_entries()
-        entries = [item for item in entries if item.get("id") != normalised["id"]]
-        entries.append(normalised)
-        entries.sort(key=lambda item: item.get("registeredAt", ""), reverse=True)
-        _write_model_registry(entries)
+        with _model_registry_file_lock():
+            entries = _model_registry_entries()
+            entries = [item for item in entries if item.get("id") != normalised["id"]]
+            entries.append(normalised)
+            entries.sort(key=lambda item: item.get("registeredAt", ""), reverse=True)
+            _write_model_registry(entries)
     return normalised
 
 
 def _remove_model_entry(model_id: str) -> bool:
     with _MODEL_REGISTRY_LOCK:
-        entries = _model_registry_entries()
-        filtered = [item for item in entries if item.get("id") != model_id]
-        if len(filtered) == len(entries):
-            return False
-        _write_model_registry(filtered)
+        with _model_registry_file_lock():
+            entries = _model_registry_entries()
+            filtered = [item for item in entries if item.get("id") != model_id]
+            if len(filtered) == len(entries):
+                return False
+            _write_model_registry(filtered)
     return True
 
 
