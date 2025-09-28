@@ -913,6 +913,9 @@ def _generate_gemini_report(model_id: str, prompt: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+MAX_LOG_TAIL_ENTRIES = 200
+
+
 class TrainingController:
     """Simple controller that tracks the lifecycle of a single training job."""
 
@@ -946,8 +949,8 @@ class TrainingController:
     @staticmethod
     def _append_log(job: Dict[str, Any], message: str) -> None:
         logs = job.setdefault("logTail", [])
-        if message not in logs:
-            logs.append(message)
+        logs.append(message)
+        logs[:] = logs[-MAX_LOG_TAIL_ENTRIES:]
 
     def _simulate_progress(self, job: Dict[str, Any]) -> None:
         if job.get("status") != "running":
