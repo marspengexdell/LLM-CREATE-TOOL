@@ -52,6 +52,10 @@ def _load_main_module() -> ModuleType:
         "TrainStartRequest",
         "TrainStatusResponse",
         "TrainAbortRequest",
+        "TrainingJobStartRequest",
+        "TrainingJobStartResponse",
+        "TrainingJobStatusResponse",
+        "TrainingJobAbortRequest",
     ):
         model = getattr(module, model_name, None)
         rebuild = getattr(model, "model_rebuild", None)
