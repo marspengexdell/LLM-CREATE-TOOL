@@ -1,36 +1,26 @@
-version: '3.8'
-
 services:
   backend:
     build:
       context: .
       dockerfile: Dockerfile.backend
-    container_name: workflow_backend
-    env_file:
-      - .env
-    volumes:
-      - .:/app
+    env_file: [.env]
+    volumes: [".:/app"]
     ports:
       - "8000:8000"
-    networks:
-      - app-network
+    networks: [app-net]
 
   frontend:
     build:
       context: .
       dockerfile: Dockerfile.frontend
-    container_name: workflow_frontend
     environment:
       - VITE_DEV_SERVER_HOST=0.0.0.0
-    volumes:
-      - .:/app
+      - VITE_API_TARGET=http://backend:8000
+    volumes: [".:/app"]
     ports:
       - "3000:3000"
-    depends_on:
-      - backend
-    networks:
-      - app-network
+    depends_on: [backend]
+    networks: [app-net]
 
 networks:
-  app-network:
-    driver: bridge
+  app-net: {}
