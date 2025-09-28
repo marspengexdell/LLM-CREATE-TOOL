@@ -40,9 +40,9 @@ except Exception:  # pragma: no cover - optional dependency
 
 main
 codex/integrate-pydantic-models-and-api-routes
-from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 
-from fastapi import Body, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import Body, FastAPI, File, HTTPException, Request, Response, UploadFile
  main
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -66,13 +66,15 @@ STORAGE_DIR = BASE_DIR / "storage"
 DATASETS_DIR = STORAGE_DIR / "datasets"
 WORKFLOWS_DIR = STORAGE_DIR / "workflows"
 LOGS_DIR = STORAGE_DIR / "logs"
+MODELS_DIR = STORAGE_DIR / "models"
 
-for directory in (DATASETS_DIR, WORKFLOWS_DIR, LOGS_DIR):
+for directory in (DATASETS_DIR, WORKFLOWS_DIR, LOGS_DIR, MODELS_DIR):
     directory.mkdir(parents=True, exist_ok=True)
 
 codex/rewrite-backend-using-fastapi-and-implement-routes-k68a2h
 
 DATASETS_INDEX_PATH = DATASETS_DIR / "index.json"
+MODELS_INDEX_PATH = MODELS_DIR / "index.json"
 
 main
 MAX_UPLOAD_SIZE_BYTES = 200 * 1024 * 1024
@@ -612,6 +614,24 @@ class TrainingJobAbortRequest(TrainAbortRequest):
 main
 
 
+class ModelRegistryEntry(BaseModel):
+    id: str
+    name: str
+    source: str
+    description: Optional[str] = None
+    quantization: Optional[str] = None
+    registeredAt: str
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ModelRegistryCreateRequest(BaseModel):
+    name: str
+    source: str
+    description: Optional[str] = None
+    quantization: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
 # ---------------------------------------------------------------------------
 # Utility helpers
 # ---------------------------------------------------------------------------
@@ -640,6 +660,49 @@ def _dataset_index() -> List[Dict[str, Any]]:
 def _write_dataset_index(entries: List[Dict[str, Any]]) -> None:
     _save_json(DATASETS_INDEX_PATH, entries)
 main
+
+
+_MODEL_REGISTRY_LOCK = threading.Lock()
+
+
+def _model_registry_entries() -> List[Dict[str, Any]]:
+    return _load_json(MODELS_INDEX_PATH, [])
+
+
+def _write_model_registry(entries: List[Dict[str, Any]]) -> None:
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    _save_json(MODELS_INDEX_PATH, entries)
+
+
+def _normalise_model_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
+    payload = dict(entry)
+    payload.setdefault("id", str(uuid4()))
+    payload.setdefault("registeredAt", _current_timestamp())
+    payload.setdefault("metadata", {})
+    if payload.get("metadata") is None:
+        payload["metadata"] = {}
+    return payload
+
+
+def _register_model_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
+    normalised = _normalise_model_entry(entry)
+    with _MODEL_REGISTRY_LOCK:
+        entries = _model_registry_entries()
+        entries = [item for item in entries if item.get("id") != normalised["id"]]
+        entries.append(normalised)
+        entries.sort(key=lambda item: item.get("registeredAt", ""), reverse=True)
+        _write_model_registry(entries)
+    return normalised
+
+
+def _remove_model_entry(model_id: str) -> bool:
+    with _MODEL_REGISTRY_LOCK:
+        entries = _model_registry_entries()
+        filtered = [item for item in entries if item.get("id") != model_id]
+        if len(filtered) == len(entries):
+            return False
+        _write_model_registry(filtered)
+    return True
 
 
 def _detect_dataset_type(filename: str) -> str:
@@ -999,22 +1062,34 @@ def get_backend_metadata() -> Dict[str, Any]:
     }
 
 
-@app.get("/api/v1/models")
-def list_models() -> List[Dict[str, str]]:
-    """Return a static list of available models."""
+@app.get("/api/v1/models", response_model=List[ModelRegistryEntry])
+def list_models() -> List[ModelRegistryEntry]:
+    """Return all registered model metadata entries."""
 
-    return [
-        {
-            "id": "gemini-1.5-flash",
-            "name": "Gemini 1.5 Flash",
-            "description": "Fast multimodal model for interactive workflows.",
-        },
-        {
-            "id": "gemini-1.5-pro",
-            "name": "Gemini 1.5 Pro",
-            "description": "Higher quality Gemini model suited for complex reasoning tasks.",
-        },
-    ]
+    entries = [_normalise_model_entry(item) for item in _model_registry_entries()]
+    return [ModelRegistryEntry(**entry) for entry in entries]
+
+
+@app.post("/api/v1/models", response_model=ModelRegistryEntry, status_code=201)
+def register_model(payload: ModelRegistryCreateRequest) -> ModelRegistryEntry:
+    entry_payload = payload.model_dump(exclude_none=True)
+    entry = _register_model_entry(entry_payload)
+    return ModelRegistryEntry(**entry)
+
+
+@app.delete("/api/v1/models/{model_id}", status_code=204)
+def delete_model(model_id: str) -> Response:
+    removed = _remove_model_entry(model_id)
+    if not removed:
+        raise HTTPException(
+            status_code=404,
+            detail=_error_detail(
+                "Model was not found in the registry.",
+                error_code="MODEL_NOT_FOUND",
+                details={"modelId": model_id},
+            ),
+        )
+    return Response(status_code=204)
 
 
 @app.get("/api/v1/datasets")
@@ -1821,6 +1896,57 @@ main
                 "evalReport": eval_report,
                 "metrics": metrics,
             }
+            return outputs, data
+
+        if "registry" in node_type_normalized and "publish" in node_type_normalized:
+            model_candidate = (
+                inputs.get("model")
+                or inputs.get("quantizedModel")
+                or inputs.get("mergedModel")
+                or inputs.get("loraWeights")
+                or inputs.get("out")
+            )
+            metadata: Dict[str, Any] = {}
+            source_reference: str
+
+            if isinstance(model_candidate, dict):
+                metadata.update(model_candidate)
+                source_reference = str(
+                    model_candidate.get("artifactPath")
+                    or model_candidate.get("source")
+                    or model_candidate.get("baseModel")
+                    or model_candidate.get("modelId")
+                    or model_candidate.get("id")
+                    or "training-run"
+                )
+                quantization_value = (
+                    data.get("quantization")
+                    or model_candidate.get("dtype")
+                    or model_candidate.get("quantizationScheme")
+                    or model_candidate.get("quantization")
+                )
+            else:
+                source_reference = str(model_candidate or data.get("source") or "training-run")
+                quantization_value = data.get("quantization")
+
+            metadata.update(data.get("metadata") or {})
+
+            entry_payload = {
+                "name": data.get("modelName")
+                or data.get("name")
+                or (isinstance(model_candidate, dict) and model_candidate.get("name"))
+                or f"Model {node.id}",
+                "source": data.get("source") or source_reference,
+                "description": data.get("description"),
+                "quantization": data.get("quantizationSpec")
+                or quantization_value
+                or data.get("quantizationScheme"),
+                "metadata": metadata,
+            }
+
+            entry = _register_model_entry(entry_payload)
+            data.update({"registryEntry": entry})
+            outputs = {"out": entry, "model": entry}
             return outputs, data
 
         # Default passthrough behaviour for any other node types

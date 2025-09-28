@@ -52,10 +52,15 @@ def _load_main_module() -> ModuleType:
         "TrainStartRequest",
         "TrainStatusResponse",
         "TrainAbortRequest",
+codex/add-model-registration-storage-and-apis
+        "ModelRegistryEntry",
+        "ModelRegistryCreateRequest",
+
         "TrainingJobStartRequest",
         "TrainingJobStartResponse",
         "TrainingJobStatusResponse",
         "TrainingJobAbortRequest",
+main
     ):
         model = getattr(module, model_name, None)
         rebuild = getattr(model, "model_rebuild", None)
@@ -87,8 +92,9 @@ def storage_paths(workflow_main: ModuleType, tmp_path: Path, monkeypatch: pytest
     datasets_dir = storage_dir / "datasets"
     workflows_dir = storage_dir / "workflows"
     logs_dir = storage_dir / "logs"
+    models_dir = storage_dir / "models"
 
-    for directory in (datasets_dir, workflows_dir, logs_dir):
+    for directory in (datasets_dir, workflows_dir, logs_dir, models_dir):
         directory.mkdir(parents=True, exist_ok=True)
 
     monkeypatch.setattr(workflow_main, "BASE_DIR", base_dir)
@@ -96,7 +102,9 @@ def storage_paths(workflow_main: ModuleType, tmp_path: Path, monkeypatch: pytest
     monkeypatch.setattr(workflow_main, "DATASETS_DIR", datasets_dir)
     monkeypatch.setattr(workflow_main, "WORKFLOWS_DIR", workflows_dir)
     monkeypatch.setattr(workflow_main, "LOGS_DIR", logs_dir)
+    monkeypatch.setattr(workflow_main, "MODELS_DIR", models_dir)
     monkeypatch.setattr(workflow_main, "DATASETS_INDEX_PATH", datasets_dir / "index.json")
+    monkeypatch.setattr(workflow_main, "MODELS_INDEX_PATH", models_dir / "index.json")
     monkeypatch.setattr(workflow_main, "TRAINING_STATE_PATH", storage_dir / "training_state.json")
 
     return {
@@ -105,6 +113,7 @@ def storage_paths(workflow_main: ModuleType, tmp_path: Path, monkeypatch: pytest
         "datasets": datasets_dir,
         "workflows": workflows_dir,
         "logs": logs_dir,
+        "models": models_dir,
     }
 
 

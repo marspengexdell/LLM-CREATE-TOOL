@@ -198,20 +198,30 @@ EOF
 ### API checks
 
 ```bash
-# GET /api/v1/models
+# GET /api/v1/models (empty registry)
 curl -sS http://localhost:8000/api/v1/models | jq
-# → [
-#     {
-#       "id": "gemini-1.5-flash",
-#       "name": "Gemini 1.5 Flash",
-#       "description": "Fast multimodal model for interactive workflows."
-#     },
-#     {
-#       "id": "gemini-1.5-pro",
-#       "name": "Gemini 1.5 Pro",
-#       "description": "Higher quality Gemini model suited for complex reasoning tasks."
-#     }
-#   ]
+# → []
+
+# POST /api/v1/models
+curl -sS -X POST http://localhost:8000/api/v1/models \
+  -H 'content-type: application/json' \
+  -d '{
+        "name": "Quant Demo",
+        "source": "runs/demo/model.gguf",
+        "quantization": "int4",
+        "description": "Test entry"
+      }' | jq
+# → {
+#     "id": "...",
+#     "name": "Quant Demo",
+#     "source": "runs/demo/model.gguf",
+#     "quantization": "int4",
+#     "registeredAt": "2024-06-01T12:34:56Z",
+#     "metadata": {}
+#   }
+
+# DELETE /api/v1/models/{id}
+curl -sS -X DELETE http://localhost:8000/api/v1/models/<id-from-response>
 
 # GET /api/v1/datasets (before upload)
 curl -sS http://localhost:8000/api/v1/datasets | jq
