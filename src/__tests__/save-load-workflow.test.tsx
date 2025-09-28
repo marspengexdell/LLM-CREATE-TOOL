@@ -12,6 +12,7 @@ describe('save and load workflow flow', () => {
     const alertMock = vi.spyOn(window, 'alert').mockImplementation(() => {});
 
     let savedPayload: any = null;
+    let runPayload: any = null;
 
     server.use(
       http.post('/api/v1/workflows/save', async ({ request }) => {
@@ -32,14 +33,30 @@ describe('save and load workflow flow', () => {
             {
               id: 'node-loaded',
               type: 'data_hub',
-              x: 120,
-              y: 120,
+              position: { x: 120, y: 120 },
               data: { datasetName: 'Loaded dataset' },
             },
           ],
           edges: [],
         })
-      )
+      ),
+      http.post('/api/v1/workflow/run', async ({ request }) => {
+        runPayload = await request.json();
+        return HttpResponse.json({
+          nodes: [
+            {
+              id: 'node-loaded',
+              type: 'data_hub',
+              x: 120,
+              y: 120,
+              data: { datasetName: 'Loaded dataset' },
+              status: 'idle',
+            },
+          ],
+          edges: [],
+          run_id: 'run-123',
+        });
+      })
     );
 
     render(<App />);
@@ -68,5 +85,12 @@ describe('save and load workflow flow', () => {
     await userEvent.click(workflowLoadButton);
 
     await screen.findByText('Loaded dataset');
+
+    const runButton = within(toolbar).getByRole('button', { name: /^Run$/i });
+    await userEvent.click(runButton);
+
+    await waitFor(() => {
+      expect(runPayload?.nodes?.[0]?.position).toEqual({ x: 120, y: 120 });
+    });
   });
 });
