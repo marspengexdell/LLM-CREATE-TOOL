@@ -24,7 +24,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-codex/rewrite-backend-using-fastapi-and-implement-routes-k68a2h
 
 try:  # Optional import to allow unit tests without the dependency installed.
     import google.generativeai as genai  # type: ignore
@@ -38,12 +37,9 @@ try:  # pragma: no cover - training metrics degrade gracefully without GPUs
 except Exception:  # pragma: no cover - optional dependency
     pynvml = None  # type: ignore
 
-main
-codex/integrate-pydantic-models-and-api-routes
 from fastapi import FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 
 from fastapi import Body, FastAPI, File, HTTPException, Request, Response, UploadFile
- main
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -71,24 +67,20 @@ MODELS_DIR = STORAGE_DIR / "models"
 for directory in (DATASETS_DIR, WORKFLOWS_DIR, LOGS_DIR, MODELS_DIR):
     directory.mkdir(parents=True, exist_ok=True)
 
-codex/rewrite-backend-using-fastapi-and-implement-routes-k68a2h
 
 DATASETS_INDEX_PATH = DATASETS_DIR / "index.json"
 MODELS_INDEX_PATH = MODELS_DIR / "index.json"
 
-main
 MAX_UPLOAD_SIZE_BYTES = 200 * 1024 * 1024
 PREVIEW_LIMIT_BYTES = 1 * 1024 * 1024
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
 TEXT_EXTENSIONS = {".txt", ".md", ".json", ".csv"}
 ALLOWED_EXTENSIONS = IMAGE_EXTENSIONS | TEXT_EXTENSIONS
-codex/rewrite-backend-using-fastapi-and-implement-routes-k68a2h
 
 DATASET_METADATA_FILENAME = "metadata.json"
 MAX_CONTEXT_SNIPPET_CHARS = 4000
 
-main
 
 TRAINING_STATE_PATH = STORAGE_DIR / "training_state.json"
 
@@ -108,7 +100,6 @@ if not LOGGER.handlers:
     file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
     LOGGER.addHandler(file_handler)
 
-codex/rewrite-backend-using-fastapi-and-implement-routes-k68a2h
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 if _GENAI_IMPORT_ERROR:
@@ -452,7 +443,6 @@ else:
             LOGGER.error("Failed to configure Gemini client: %s", exc)
     else:
         LOGGER.warning("GEMINI_API_KEY is not set; Gemini functionality is disabled.")
-main
 
 # ---------------------------------------------------------------------------
 # FastAPI setup
@@ -539,7 +529,6 @@ class WorkflowRunResponse(BaseModel):
     nodes: List[WorkflowRunNode]
 
 
-codex/integrate-pydantic-models-and-api-routes
 class TrainingStartRequest(BaseModel):
     dataset_id: str = Field(..., alias="datasetId")
     model_id: str = Field(..., alias="modelId")
@@ -611,7 +600,6 @@ class TrainingJobStatusResponse(TrainStatusResponse):
 
 class TrainingJobAbortRequest(TrainAbortRequest):
     """Request payload for the legacy /train/abort endpoint."""
-main
 
 
 class ModelRegistryEntry(BaseModel):
@@ -649,7 +637,6 @@ def _load_json(path: Path, default: Any) -> Any:
 
 def _save_json(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-codex/rewrite-backend-using-fastapi-and-implement-routes-k68a2h
 
 
 
@@ -659,7 +646,6 @@ def _dataset_index() -> List[Dict[str, Any]]:
 
 def _write_dataset_index(entries: List[Dict[str, Any]]) -> None:
     _save_json(DATASETS_INDEX_PATH, entries)
-main
 
 
 _MODEL_REGISTRY_LOCK = threading.Lock()
@@ -730,7 +716,6 @@ def _detect_mime_type(extension: str) -> str:
     return mapping.get(extension.lower(), "application/octet-stream")
 
 
-codex/rewrite-backend-using-fastapi-and-implement-routes-k68a2h
 def _dataset_dir(dataset_id: str) -> Path:
     return DATASETS_DIR / dataset_id
 
@@ -845,7 +830,6 @@ def _generate_gemini_report(model_id: str, prompt: str) -> str:
         return "\n".join(candidate_texts).strip()
 
     raise RuntimeError("Gemini response did not contain any text output.")
-main
 
 
 # ---------------------------------------------------------------------------
@@ -1096,6 +1080,11 @@ def delete_model(model_id: str) -> Response:
 def list_datasets() -> List[Dict[str, Any]]:
     """Return metadata for uploaded datasets."""
 
+codex/update-list_datasets-function-to-return-one-source
+
+    return _collect_dataset_metadata()
+
+main
     return _dataset_index()
 
 
@@ -1144,7 +1133,6 @@ async def upload_dataset(file: UploadFile = File(...)) -> Dict[str, Any]:
         )
 
     dataset_id = str(uuid4())
-codex/rewrite-backend-using-fastapi-and-implement-routes-k68a2h
     dataset_folder = _dataset_dir(dataset_id)
     dataset_folder.mkdir(parents=True, exist_ok=False)
 
@@ -1222,7 +1210,6 @@ codex/rewrite-backend-using-fastapi-and-implement-routes-k68a2h
     _write_dataset_index(entries)
 
     LOGGER.info("Uploaded dataset %s (%s)", file.filename, dataset_id)
-main
     return metadata
 
 
@@ -1598,7 +1585,6 @@ class WorkflowExecutor:
             data["report"] = report
             data["model"] = model_id
             data["aggregated_inputs"] = formatted_inputs
-main
             return {"out": report}, data
 
         if node.type == "decision_logic":
