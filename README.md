@@ -313,7 +313,9 @@ curl -sS -X POST http://localhost:8000/api/v1/workflow/run \
 When you are finished, you can remove the temporary files with `rm -r smoke-tests`.
 
 ## Testing
-codex/set-up-testing-with-vitest-and-testing-library
+
+The project ships with both frontend and backend test suites so you can validate changes quickly.
+
 The frontend includes Vitest suites that cover critical workflow interactions such as uploading datasets, saving/loading workflows, and executing a run. To install dependencies and run the tests locally:
 
 ```bash
@@ -331,4 +333,3 @@ pytest
 ```
 
 The tests spin up the FastAPI application with in-memory clients so they can run without external services.
-main
