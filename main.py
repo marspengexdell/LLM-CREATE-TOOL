@@ -1415,26 +1415,7 @@ class WorkflowExecutor:
             node_type_normalized = "generate_report"
 
         if node_type_normalized == "generate_report":
-codex/rewrite-backend-using-fastapi-and-implement-routes-k68a2h
             prompt = data.get("prompt") or "Summarise the provided workflow inputs into a concise report."
-            model_name = data.get("modelId") or data.get("model") or "gemini-1.5-flash"
-
-            if self.gemini_service and self.gemini_service.available:
-                report = self.gemini_service.generate(model_name, prompt, inputs)
-            else:
-                error_message = (
-                    self.gemini_service.error_message
-                    if self.gemini_service and self.gemini_service.error_message
-                    else "Gemini service is not configured."
-                )
-                raise RuntimeError(error_message)
-
-            data["report"] = report
-
-            prompt = data.get(
-                "prompt",
-                "Generate a detailed report that summarises the provided workflow inputs.",
-            )
             context = data.get("context")
             formatted_inputs = _format_inputs_for_prompt(inputs)
             prompt_sections = [prompt]
@@ -1444,10 +1425,27 @@ codex/rewrite-backend-using-fastapi-and-implement-routes-k68a2h
             final_prompt = "\n\n".join(prompt_sections)
 
             model_id = data.get("model") or data.get("modelId") or GEMINI_DEFAULT_MODEL
-            try:
-                report = _generate_gemini_report(model_id, final_prompt)
-            except Exception as exc:  # pylint: disable=broad-except
-                raise RuntimeError(f"Gemini report generation failed: {exc}") from exc
+
+            if self.gemini_service and self.gemini_service.available:
+                try:
+                    report = self.gemini_service.generate(model_id, prompt, inputs)
+                except Exception as exc:  # pragma: no cover - dependency failures bubble up
+                    raise RuntimeError(f"Gemini report generation failed: {exc}") from exc
+            else:
+                unavailable_reason = (
+                    self.gemini_service.error_message
+                    if self.gemini_service and self.gemini_service.error_message
+                    else "Gemini service is not configured or available."
+                )
+                placeholder_header = "[Gemini placeholder]"
+                report = (
+                    f"{placeholder_header}\n"
+                    f"{unavailable_reason}\n\n"
+                    f"Model requested: {model_id}\n"
+                    f"Prompt: {prompt}\n\n"
+                    f"Workflow inputs:\n{formatted_inputs}\n\n"
+                    f"Full prompt reference:\n{final_prompt}"
+                )
 
             data["report"] = report
             data["model"] = model_id

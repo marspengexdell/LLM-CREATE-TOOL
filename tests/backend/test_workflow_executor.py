@@ -5,6 +5,19 @@ from copy import deepcopy
 import pytest
 
 
+def _load_executor_types(workflow_main):
+    """Helper to access the dynamic workflow module classes."""
+
+    return {
+        "Position": workflow_main.Position,
+        "WorkflowNode": workflow_main.WorkflowNode,
+        "WorkflowEdge": workflow_main.WorkflowEdge,
+        "WorkflowDefinition": workflow_main.WorkflowDefinition,
+        "WorkflowExecutor": workflow_main.WorkflowExecutor,
+        "GEMINI_DEFAULT_MODEL": workflow_main.GEMINI_DEFAULT_MODEL,
+    }
+
+
 def _basic_workflow_definition():
     return {
         "name": "Example workflow",
@@ -100,6 +113,50 @@ async def test_run_workflow_reports_node_failure(async_client):
     payload = run_response.json()
     statuses = {node["id"]: node["status"] for node in payload["nodes"]}
     assert statuses["text-source"] == "done"
-    assert statuses["report"] == "failed"
+    assert statuses["report"] == "done"
     report_node = next(node for node in payload["nodes"] if node["id"] == "report")
-    assert "Gemini" in report_node["data"].get("error", "")
+    report_data = report_node.get("data", {})
+    assert "[Gemini placeholder]" in report_data.get("report", "")
+
+
+def test_generate_report_placeholder_without_gemini(workflow_main):
+    types = _load_executor_types(workflow_main)
+    Position = types["Position"]
+    WorkflowNode = types["WorkflowNode"]
+    WorkflowEdge = types["WorkflowEdge"]
+    WorkflowDefinition = types["WorkflowDefinition"]
+    WorkflowExecutor = types["WorkflowExecutor"]
+    default_model = types["GEMINI_DEFAULT_MODEL"]
+
+    text_node = WorkflowNode(
+        id="text-source",
+        type="text_input",
+        position=Position(x=0, y=0),
+        data={"text": "hello"},
+    )
+    report_node = WorkflowNode(
+        id="report",
+        type="generate_report",
+        position=Position(x=400, y=0),
+        data={"prompt": "Summarise"},
+    )
+    edge = WorkflowEdge(
+        id="link",
+        fromNode="text-source",
+        fromPort="out",
+        toNode="report",
+        toPort="in",
+    )
+
+    definition = WorkflowDefinition(nodes=[text_node, report_node], edges=[edge])
+
+    executor = WorkflowExecutor(definition, gemini_service=None)
+    response = executor.run()
+
+    report_state = next(node for node in response.nodes if node.id == "report")
+    assert report_state.status == "done"
+
+    report_text = report_state.data["report"]
+    assert "[Gemini placeholder]" in report_text
+    assert "hello" in report_state.data["aggregated_inputs"]
+    assert report_state.data["model"] == default_model
