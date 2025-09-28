@@ -4,7 +4,6 @@ import { createRoot } from 'react-dom/client';
 
 const DEFAULT_ERROR_MESSAGE = 'Request failed, please retry.';
 
-codex/add-lightweight-toast-mechanism
 const TOAST_DURATION = 5000;
 
 const ToastContext = React.createContext(() => {});
@@ -389,7 +388,6 @@ const ModelHubConfigurator = ({ onSelectModel }) => {
             const response = await fetch('/api/v1/models');
             if (!response.ok) {
                 throw new Error('Network response was not ok');
-codex/add-lightweight-toast-mechanism
 
 
     useEffect(() => {
@@ -509,7 +507,6 @@ const DataHubConfigurator = ({ onSelectDataset }) => {
             const data = await response.json();
             setDatasets(data);
         } catch (error) {
-codex/add-lightweight-toast-mechanism
             handleApiError(enqueueToast, error, DEFAULT_ERROR_MESSAGE, 'Failed to fetch datasets');
 
             handleApiError(createErrorInfo(error), 'Failed to fetch datasets');
@@ -567,7 +564,6 @@ main
             // Refresh dataset list after successful upload
             fetchDatasets();
         } catch (error) {
-codex/add-lightweight-toast-mechanism
             handleApiError(enqueueToast, error, DEFAULT_ERROR_MESSAGE, 'Failed to upload dataset file');
 
              handleApiError(createErrorInfo(error), 'Failed to upload dataset file');
@@ -1175,9 +1171,7 @@ const LoadWorkflowModal = ({ onLoadWorkflow, closeModal, onCreateNewWorkflow }) 
     }, [enqueueToast]);
 
     useEffect(() => {
-codex/add-lightweight-toast-mechanism
 
-codex/add-empty-state-handling-for-various-components
 
         const fetchWorkflows = async () => {
             try {
@@ -1756,7 +1750,6 @@ export const App = () => {
                 description: 'Workflow saved successfully.',
             });
         } catch (error) {
-codex/add-lightweight-toast-mechanism
             handleApiError(enqueueToast, error, DEFAULT_ERROR_MESSAGE, 'Failed to save workflow');
 
             handleApiError(createErrorInfo(error), 'Failed to save workflow');
@@ -1796,7 +1789,6 @@ main
                 throw new Error('Invalid workflow data received from server.');
             }
         } catch (error) {
-codex/add-lightweight-toast-mechanism
             handleApiError(enqueueToast, error, DEFAULT_ERROR_MESSAGE, 'Failed to load workflow');
 
             handleApiError(createErrorInfo(error), 'Failed to load workflow');
@@ -1856,7 +1848,6 @@ main
             }
 
         } catch (error) {
-codex/add-lightweight-toast-mechanism
             handleApiError(enqueueToast, error, DEFAULT_ERROR_MESSAGE, 'Failed to run workflow');
 
             handleApiError(createErrorInfo(error), 'Failed to run workflow');
