@@ -4,9 +4,45 @@ import { createRoot } from 'react-dom/client';
 
 const DEFAULT_ERROR_MESSAGE = 'Request failed, please retry.';
 
-const handleApiError = (error, fallbackMessage = DEFAULT_ERROR_MESSAGE, context = 'API request failed') => {
+const TOAST_DURATION = 5000;
+
+const ToastContext = React.createContext(() => {});
+
+const useToast = () => React.useContext(ToastContext);
+
+const ToastViewport = ({ toasts, onDismiss }) => (
+    <div className="toast-viewport" role="region" aria-live="polite" aria-atomic="true" aria-label="Notifications">
+        {toasts.map((toast) => (
+            <div
+                key={toast.id}
+                className={`toast-card toast-${toast.tone}`}
+                role={toast.tone === 'error' ? 'alert' : 'status'}
+                aria-live={toast.tone === 'error' ? 'assertive' : 'polite'}
+            >
+                <div className="toast-copy">
+                    <h4>{toast.title}</h4>
+                    {toast.description ? <p>{toast.description}</p> : null}
+                </div>
+                <button
+                    type="button"
+                    className="toast-dismiss-btn"
+                    onClick={() => onDismiss(toast.id)}
+                    aria-label="Dismiss notification"
+                >
+                    <Icons.Close />
+                </button>
+            </div>
+        ))}
+    </div>
+);
+
+const handleApiError = (enqueueToast, error, fallbackMessage = DEFAULT_ERROR_MESSAGE, context = 'API request failed') => {
     console.error(context, error);
-    alert(fallbackMessage);
+    enqueueToast({
+        tone: 'error',
+        title: 'We hit a snag',
+        description: fallbackMessage,
+    });
 };
 
 // --- ICONS ---
@@ -60,43 +96,26 @@ const Modal = ({ isOpen, onClose, title, children }) => {
 };
 
 const ModelHubConfigurator = ({ onSelectModel }) => {
+    const enqueueToast = useToast();
     const [models, setModels] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
 
-codex/add-empty-state-handling-for-various-components
     const fetchModels = useCallback(async () => {
         try {
             setIsLoading(true);
             const response = await fetch('/api/v1/models');
             if (!response.ok) {
                 throw new Error('Network response was not ok');
-
-    useEffect(() => {
-        const fetchModels = async () => {
-            try {
-                setIsLoading(true);
-                const response = await fetch('/api/v1/models');
-                if (!response.ok) {
-                    throw new Error('Network response was not ok');
-                }
-                const data = await response.json();
-                setModels(data);
-            } catch (error) {
-                handleApiError(error, DEFAULT_ERROR_MESSAGE, 'Failed to fetch models');
-            } finally {
-                setIsLoading(false);
-main
             }
             const data = await response.json();
             setModels(data);
         } catch (error) {
-            console.error("Failed to fetch models:", error);
-            alert("Could not fetch models from the server.");
+            handleApiError(enqueueToast, error, DEFAULT_ERROR_MESSAGE, 'Failed to fetch models');
         } finally {
             setIsLoading(false);
         }
-    }, []);
+    }, [enqueueToast]);
 
     useEffect(() => {
         fetchModels();
@@ -141,26 +160,27 @@ main
 };
 
 const DataHubConfigurator = ({ onSelectDataset }) => {
+    const enqueueToast = useToast();
     const [datasets, setDatasets] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
     const fileInputRef = useRef(null);
 
-    const fetchDatasets = async () => {
+    const fetchDatasets = useCallback(async () => {
         try {
             setIsLoading(true);
             const response = await fetch('/api/v1/datasets');
             const data = await response.json();
             setDatasets(data);
         } catch (error) {
-            handleApiError(error, DEFAULT_ERROR_MESSAGE, 'Failed to fetch datasets');
+            handleApiError(enqueueToast, error, DEFAULT_ERROR_MESSAGE, 'Failed to fetch datasets');
         } finally {
             setIsLoading(false);
         }
-    };
-    
+    }, [enqueueToast]);
+
     useEffect(() => {
         fetchDatasets();
-    }, []);
+    }, [fetchDatasets]);
 
     const handleFileUpload = async (e) => {
         const file = e.target.files[0];
@@ -175,12 +195,12 @@ const DataHubConfigurator = ({ onSelectDataset }) => {
                 body: formData,
             });
             if (!response.ok) {
-                 throw new Error('Upload failed');
+                throw new Error('Upload failed');
             }
             // Refresh dataset list after successful upload
             fetchDatasets();
         } catch (error) {
-             handleApiError(error, DEFAULT_ERROR_MESSAGE, 'Failed to upload dataset file');
+            handleApiError(enqueueToast, error, DEFAULT_ERROR_MESSAGE, 'Failed to upload dataset file');
         }
     };
 
@@ -235,6 +255,7 @@ const DataHubConfigurator = ({ onSelectDataset }) => {
 };
 
 const LoadWorkflowModal = ({ onLoadWorkflow, closeModal, onCreateNewWorkflow }) => {
+    const enqueueToast = useToast();
     const [workflows, setWorkflows] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
 
@@ -246,30 +267,13 @@ const LoadWorkflowModal = ({ onLoadWorkflow, closeModal, onCreateNewWorkflow }) 
             const data = await response.json();
             setWorkflows(data);
         } catch (error) {
-            console.error(error);
-            alert(error.message);
+            handleApiError(enqueueToast, error, DEFAULT_ERROR_MESSAGE, 'Failed to fetch workflows');
         } finally {
             setIsLoading(false);
         }
-    }, []);
+    }, [enqueueToast]);
 
     useEffect(() => {
-codex/add-empty-state-handling-for-various-components
-
-        const fetchWorkflows = async () => {
-            try {
-                setIsLoading(true);
-                const response = await fetch('/api/v1/workflows');
-                if (!response.ok) throw new Error('Failed to fetch workflows');
-                const data = await response.json();
-                setWorkflows(data);
-            } catch (error) {
-                handleApiError(error, DEFAULT_ERROR_MESSAGE, 'Failed to fetch workflows');
-            } finally {
-                setIsLoading(false);
-            }
-        };
-main
         fetchWorkflows();
     }, [fetchWorkflows]);
 
@@ -480,8 +484,36 @@ export const App = () => {
     const [connectionPreview, setConnectionPreview] = useState(null);
     const [modalState, setModalState] = useState({ isOpen: false, type: null, nodeId: null });
     const [lastRunId, setLastRunId] = useState(null);
-    
+    const [toasts, setToasts] = useState([]);
+
     const canvasRef = useRef(null);
+    const toastTimersRef = useRef(new Map());
+
+    const dismissToast = useCallback((id) => {
+        setToasts(prev => prev.filter(toast => toast.id !== id));
+        const timeoutId = toastTimersRef.current.get(id);
+        if (timeoutId) {
+            clearTimeout(timeoutId);
+            toastTimersRef.current.delete(id);
+        }
+    }, []);
+
+    const enqueueToast = useCallback(({ tone = 'success', title, description }) => {
+        const id = crypto.randomUUID();
+        setToasts(prev => [...prev, { id, tone, title, description }]);
+        const timeoutId = setTimeout(() => {
+            setToasts(prev => prev.filter(toast => toast.id !== id));
+            toastTimersRef.current.delete(id);
+        }, TOAST_DURATION);
+        toastTimersRef.current.set(id, timeoutId);
+    }, []);
+
+    useEffect(() => {
+        return () => {
+            toastTimersRef.current.forEach(clearTimeout);
+            toastTimersRef.current.clear();
+        };
+    }, []);
 
     const handleDragStart = (e, nodeType) => {
         e.dataTransfer.setData('application/reactflow', nodeType);
@@ -641,7 +673,11 @@ export const App = () => {
     const handleSaveWorkflow = async () => {
         const name = prompt("Enter a name for your workflow:");
         if (!name || name.trim() === '') {
-            alert("Workflow name cannot be empty.");
+            enqueueToast({
+                tone: 'error',
+                title: 'Name required',
+                description: 'Workflow name cannot be empty.',
+            });
             return;
         }
 
@@ -670,9 +706,13 @@ export const App = () => {
                 const error = await response.json();
                 throw new Error(error.detail || 'Failed to save workflow.');
             }
-            alert('Workflow saved successfully!');
+            enqueueToast({
+                tone: 'success',
+                title: 'All set!',
+                description: 'Workflow saved successfully.',
+            });
         } catch (error) {
-            handleApiError(error, DEFAULT_ERROR_MESSAGE, 'Failed to save workflow');
+            handleApiError(enqueueToast, error, DEFAULT_ERROR_MESSAGE, 'Failed to save workflow');
         }
     };
 
@@ -701,7 +741,7 @@ export const App = () => {
                 throw new Error('Invalid workflow data received from server.');
             }
         } catch (error) {
-            handleApiError(error, DEFAULT_ERROR_MESSAGE, 'Failed to load workflow');
+            handleApiError(enqueueToast, error, DEFAULT_ERROR_MESSAGE, 'Failed to load workflow');
         }
     };
 
@@ -748,7 +788,7 @@ export const App = () => {
             }
 
         } catch (error) {
-            handleApiError(error, DEFAULT_ERROR_MESSAGE, 'Failed to run workflow');
+            handleApiError(enqueueToast, error, DEFAULT_ERROR_MESSAGE, 'Failed to run workflow');
             // Revert status to idle on failure
             setNodes(prev => prev.map(n => ({...n, status: 'idle'})));
             setLastRunId(null);
@@ -776,31 +816,32 @@ export const App = () => {
 
 
     return (
-        <>
-            <header className="app-header">
-                <h1>Visual Workflow Builder</h1>
-            </header>
-            <main className="main-container">
-                <aside className="sidebar">
-                    <h2>Toolbox</h2>
-                    <div className="sidebar-items-container">
-                        {TOOLBOX_MODULES.map(module => (
-                            <SidebarItem key={module.type} module={module} onDragStart={handleDragStart} />
-                        ))}
-                    </div>
-                </aside>
-                <section
-                    className="canvas-area"
-                    ref={canvasRef}
-                    onDragOver={handleDragOver}
-                    onDrop={handleDrop}
-                >
-                    <Toolbar onRun={runWorkflow} onSave={handleSaveWorkflow} onLoad={() => openModal('load_workflow')} onClear={clearCanvas} />
-                    {lastRunId && (
-                        <div className="run-status">Last run ID: {lastRunId}</div>
-                    )}
-                    <svg className="edge-layer">
-                        {edges.map(edge => {
+        <ToastContext.Provider value={enqueueToast}>
+            <>
+                <header className="app-header">
+                    <h1>Visual Workflow Builder</h1>
+                </header>
+                <main className="main-container">
+                    <aside className="sidebar">
+                        <h2>Toolbox</h2>
+                        <div className="sidebar-items-container">
+                            {TOOLBOX_MODULES.map(module => (
+                                <SidebarItem key={module.type} module={module} onDragStart={handleDragStart} />
+                            ))}
+                        </div>
+                    </aside>
+                    <section
+                        className="canvas-area"
+                        ref={canvasRef}
+                        onDragOver={handleDragOver}
+                        onDrop={handleDrop}
+                    >
+                        <Toolbar onRun={runWorkflow} onSave={handleSaveWorkflow} onLoad={() => openModal('load_workflow')} onClear={clearCanvas} />
+                        {lastRunId && (
+                            <div className="run-status">Last run ID: {lastRunId}</div>
+                        )}
+                        <svg className="edge-layer">
+                            {edges.map(edge => {
                            const fromNode = nodes.find(n => n.id === edge.fromNode);
                            const toNode = nodes.find(n => n.id === edge.toNode);
                            if (!fromNode || !toNode) return null;
@@ -851,12 +892,14 @@ export const App = () => {
                         const module = moduleMap.get(node.type);
                         return module ? <Node key={node.id} node={node} module={module} onMouseDown={handleNodeMouseDown} onPortMouseDown={handlePortMouseDown} onNodeDataChange={handleNodeDataChange} onConfigureNode={handleConfigureNode} /> : null;
                     })}
-                </section>
-            </main>
-             <Modal isOpen={modalState.isOpen} onClose={closeModal} title={MODAL_TITLES[modalState.type] || 'Configuration'}>
-                {renderModalContent()}
-            </Modal>
-        </>
+                    </section>
+                </main>
+                 <Modal isOpen={modalState.isOpen} onClose={closeModal} title={MODAL_TITLES[modalState.type] || 'Configuration'}>
+                    {renderModalContent()}
+                </Modal>
+                <ToastViewport toasts={toasts} onDismiss={dismissToast} />
+            </>
+        </ToastContext.Provider>
     );
 };
 
