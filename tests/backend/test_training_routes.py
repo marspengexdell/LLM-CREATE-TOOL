@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from pathlib import Path
 
 import pytest
+
+
+def _read_json(path: Path) -> dict:
+    return json.loads(path.read_text("utf-8"))
 
 
 @pytest.mark.anyio
@@ -61,3 +67,38 @@ async def test_training_abort_unknown_job(async_client):
     assert response.status_code == 404
     payload = response.json()
     assert payload["error"]["details"]["errorCode"] == "TRAINING_JOB_NOT_FOUND"
+
+
+@pytest.mark.anyio
+async def test_training_state_recovers_from_truncated_file(async_client, storage_paths, workflow_main):
+    request_payload = {
+        "datasetId": "dataset-backup",
+        "modelId": "model-backup",
+        "hyperparameters": {"learningRate": 0.5},
+    }
+
+    start_response = await async_client.post("/api/v1/train/start", json=request_payload)
+    assert start_response.status_code == 200
+    job_id = start_response.json()["jobId"]
+
+    status_response = await async_client.get(f"/api/v1/train/status?jobId={job_id}")
+    assert status_response.status_code == 200
+
+    state_path = storage_paths["storage"] / "training_state.json"
+    backup_path = state_path.with_suffix(state_path.suffix + ".bak")
+
+    assert backup_path.exists(), "Expected a backup file after persisting training state"
+    backup_state = _read_json(backup_path)
+    assert job_id in backup_state.get("jobs", {})
+
+    state_path.write_text("{", encoding="utf-8")
+
+    workflow_main.TRAINING_CONTROLLER = workflow_main.TrainingController(
+        workflow_main.TRAINING_STATE_PATH, workflow_main.LOGGER
+    )
+
+    recovered_response = await async_client.get(f"/api/v1/train/status?jobId={job_id}")
+    assert recovered_response.status_code == 200
+    recovered_payload = recovered_response.json()
+    assert recovered_payload["jobId"] == job_id
+    assert recovered_payload["datasetId"] == request_payload["datasetId"]

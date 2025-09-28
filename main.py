@@ -18,6 +18,7 @@ import logging
 import os
 import threading
 import time
+import shutil
 from contextlib import contextmanager
 from collections import defaultdict, deque
 from datetime import datetime
@@ -595,17 +596,60 @@ class ModelRegistryCreateRequest(BaseModel):
 
 
 def _load_json(path: Path, default: Any) -> Any:
-    if not path.exists():
-        return default
+    primary_error: Optional[Exception] = None
     try:
-        return json.loads(path.read_text("utf-8"))
-    except json.JSONDecodeError:
-        LOGGER.warning("Failed to read JSON from %s. Returning default.", path)
-        return default
+        with path.open("r", encoding="utf-8") as stream:
+            return json.load(stream)
+    except FileNotFoundError as exc:
+        primary_error = exc
+    except json.JSONDecodeError as exc:
+        primary_error = exc
+        LOGGER.warning("Failed to parse JSON from %s (%s). Attempting backup.", path, exc)
+
+    backup_path = path.with_suffix(path.suffix + ".bak")
+    if backup_path.exists():
+        try:
+            with backup_path.open("r", encoding="utf-8") as stream:
+                data = json.load(stream)
+            LOGGER.info("Loaded backup JSON from %s after error reading %s.", backup_path, path)
+            return data
+        except json.JSONDecodeError as exc:
+            LOGGER.warning(
+                "Failed to parse backup JSON from %s (%s). Returning default state.",
+                backup_path,
+                exc,
+            )
+
+    if isinstance(primary_error, FileNotFoundError):
+        LOGGER.debug("JSON file %s not found. Returning default state.", path)
+    elif primary_error is not None:
+        LOGGER.warning("Failed to read JSON from %s (%s). Returning default state.", path, primary_error)
+    return default
 
 
 def _save_json(path: Path, payload: Any) -> None:
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    serialized = json.dumps(payload, ensure_ascii=False, indent=2)
+    tmp_path: Optional[Path] = None
+    try:
+        with NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as tmp_file:
+            tmp_file.write(serialized)
+            tmp_file.flush()
+            os.fsync(tmp_file.fileno())
+            tmp_path = Path(tmp_file.name)
+
+        backup_path = path.with_suffix(path.suffix + ".bak")
+        if path.exists():
+            try:
+                shutil.copy2(path, backup_path)
+            except OSError as exc:
+                LOGGER.warning("Failed to create JSON backup for %s (%s).", path, exc)
+
+        os.replace(str(tmp_path), str(path))
+        tmp_path = None
+    finally:
+        if tmp_path is not None and tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
 
 
 
