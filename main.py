@@ -47,6 +47,7 @@ from fastapi import Body, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from src.training import PipelineContext, PipelineError, TrainingPipeline
 
 try:  # pragma: no cover - graceful degradation if dependency missing
     import google.generativeai as genai  # type: ignore
@@ -1254,6 +1255,9 @@ class WorkflowExecutor:
         self.gemini_service = gemini_service
         self.logger = logger or LOGGER
         self.run_id = run_id or str(uuid4())
+        self.pipeline = TrainingPipeline(
+            PipelineContext(run_id=self.run_id, storage_dir=STORAGE_DIR, logger=self.logger)
+        )
 
     def _build_graph(self, edges: List[WorkflowEdge]) -> None:
         indegree = defaultdict(int)
@@ -1481,6 +1485,31 @@ main
                 decision = bool(input_value)
             data["decision"] = decision
             return {"true": input_value if decision else None, "false": None if decision else input_value}, data
+
+        pipeline_handlers = {
+            "dataset_build": self.pipeline.dataset_build,
+            "dataset_builder": self.pipeline.dataset_build,
+            "dataset_prepare": self.pipeline.dataset_build,
+            "tokenize": self.pipeline.tokenize,
+            "tokenizer": self.pipeline.tokenize,
+            "train_sft_lora": self.pipeline.train_sft_lora,
+            "train_lora": self.pipeline.train_sft_lora,
+            "merge_lora": self.pipeline.merge_lora,
+            "lora_merge": self.pipeline.merge_lora,
+            "quantize_export": self.pipeline.quantize_export,
+            "quantize": self.pipeline.quantize_export,
+            "eval_lmeval": self.pipeline.eval_lmeval,
+            "evaluation_lmeval": self.pipeline.eval_lmeval,
+            "registry_publish": self.pipeline.registry_publish,
+        }
+
+        handler = pipeline_handlers.get(node_type_normalized)
+        if handler:
+            try:
+                outputs, updated = handler(dict(data), inputs)
+            except PipelineError as exc:
+                raise RuntimeError(str(exc)) from exc
+            return outputs, updated
 
         if node.type in {"image_input", "text_input", "data_hub", "model_hub"}:
             return {"out": data}, data
