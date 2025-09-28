@@ -8,5 +8,4 @@ pytest
 torch
 transformers
 peft
-bitsandbytes
 lm-eval

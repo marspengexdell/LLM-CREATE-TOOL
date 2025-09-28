@@ -1,9 +1,17 @@
 FROM python:3.10-slim
 
+ARG INSTALL_TRAINING_DEPS=0
+ENV INSTALL_TRAINING_DEPS=${INSTALL_TRAINING_DEPS}
+
 WORKDIR /app
 
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.txt requirements-optional.txt ./
+RUN pip install --no-cache-dir -r requirements.txt \
+    && if [ "$INSTALL_TRAINING_DEPS" = "1" ]; then \
+        pip install --no-cache-dir -r requirements-optional.txt; \
+    else \
+        echo "Skipping optional training dependencies"; \
+    fi
 
 COPY . .
 

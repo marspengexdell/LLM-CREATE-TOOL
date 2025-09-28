@@ -28,6 +28,11 @@ This repository now contains a minimal FastAPI backend with a React/Vite front-e
    pip install -r requirements.txt
    ```
 
+   To include optional GPU/training extras (such as `bitsandbytes`), install both requirement files:
+   ```bash
+   pip install -r requirements.txt -r requirements-optional.txt
+   ```
+
 3. Run the API server:
    ```bash
    uvicorn main:app --host 0.0.0.0 --port 8000 --reload
@@ -97,6 +102,15 @@ To iterate locally with hot-reload enabled, start the stack with the default Com
 ```bash
 docker compose up --build
 ```
+
+Set the `INSTALL_TRAINING_DEPS=1` build argument when you need the optional training stack inside the backend image. For example:
+
+```bash
+docker compose build --build-arg INSTALL_TRAINING_DEPS=1 backend
+docker compose up --build
+```
+
+Alternatively, pass `INSTALL_TRAINING_DEPS=1` as an environment variable (`docker build --build-arg INSTALL_TRAINING_DEPS=1 .`) to pull in the extras during image builds. Leaving the flag unset keeps the image slim.
 
 - Backend: exposed at `http://localhost:8000`
 - Frontend dev server: `http://localhost:3000`
