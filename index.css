@@ -581,3 +581,91 @@ html, body {
     height: 100%;
     object-fit: cover;
 }
+
+.empty-state {
+    padding: 1.25rem;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background-color: var(--bg-color);
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.empty-state h4,
+.toast-card h4 {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-color);
+}
+
+.empty-state p,
+.toast-card p {
+    font-size: 0.9rem;
+    color: var(--text-secondary-color);
+}
+
+.empty-state-actions {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.toast-viewport {
+    position: fixed;
+    bottom: 1.5rem;
+    right: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    z-index: 1200;
+    pointer-events: none;
+}
+
+.toast-card {
+    pointer-events: auto;
+    min-width: 260px;
+    max-width: 360px;
+    background-color: var(--surface-color);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    display: flex;
+    gap: 0.75rem;
+    align-items: flex-start;
+    box-shadow: 0 12px 24px rgba(0, 0, 0, 0.35);
+}
+
+.toast-card.toast-success {
+    border-left: 4px solid var(--success-color);
+}
+
+.toast-card.toast-error {
+    border-left: 4px solid var(--error-color);
+}
+
+.toast-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    flex: 1;
+}
+
+.toast-copy h4,
+.toast-copy p {
+    margin: 0;
+}
+
+.toast-dismiss-btn {
+    background: none;
+    border: none;
+    color: var(--text-secondary-color);
+    cursor: pointer;
+    padding: 0.25rem;
+    margin-left: auto;
+    flex-shrink: 0;
+}
+
+.toast-dismiss-btn:hover {
+    color: var(--text-color);
+}
