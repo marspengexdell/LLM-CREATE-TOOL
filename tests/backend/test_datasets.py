@@ -38,8 +38,7 @@ async def test_upload_dataset_persists_metadata(async_client, workflow_main, sto
     datasets = list_response.json()
     assert len(datasets) == 1
     dataset_entry = datasets[0]
-    assert dataset_entry["datasetId"] == dataset_id
-    assert dataset_entry["name"] == "notes.txt"
+    assert dataset_entry == metadata
 
 
 @pytest.mark.anyio("asyncio")

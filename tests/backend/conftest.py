@@ -25,7 +25,7 @@ def _load_main_module() -> ModuleType:
     sanitised_lines = []
     for line in source.splitlines():
         stripped = line.strip()
-        if line.startswith("codex/") or stripped == "main":
+        if stripped.startswith("codex/") or stripped == "main":
             continue
         if (
             stripped
@@ -52,15 +52,12 @@ def _load_main_module() -> ModuleType:
         "TrainStartRequest",
         "TrainStatusResponse",
         "TrainAbortRequest",
-codex/add-model-registration-storage-and-apis
         "ModelRegistryEntry",
         "ModelRegistryCreateRequest",
-
         "TrainingJobStartRequest",
         "TrainingJobStartResponse",
         "TrainingJobStatusResponse",
         "TrainingJobAbortRequest",
-main
     ):
         model = getattr(module, model_name, None)
         rebuild = getattr(model, "model_rebuild", None)

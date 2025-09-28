@@ -1096,11 +1096,7 @@ def delete_model(model_id: str) -> Response:
 def list_datasets() -> List[Dict[str, Any]]:
     """Return metadata for uploaded datasets."""
 
-codex/rewrite-backend-using-fastapi-and-implement-routes-k68a2h
-    return _collect_dataset_metadata()
-
     return _dataset_index()
-main
 
 
 @app.post("/api/v1/datasets/upload")
