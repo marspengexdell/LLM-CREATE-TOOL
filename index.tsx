@@ -647,12 +647,16 @@ export const App = () => {
 
         const workflowPayload = {
             name,
-            nodes: nodes.map(node => ({
-                id: node.id,
-                type: node.type,
-                position: { x: node.x, y: node.y },
-                data: node.data,
-            })),
+            nodes: nodes.map(node => {
+                const fallbackX = node.x ?? node.position?.x ?? 0;
+                const fallbackY = node.y ?? node.position?.y ?? 0;
+                return {
+                    id: node.id,
+                    type: node.type,
+                    position: { x: fallbackX, y: fallbackY },
+                    data: node.data,
+                };
+            }),
             edges,
         };
 
@@ -681,7 +685,17 @@ export const App = () => {
             }
             const data = await response.json();
             if (data.nodes && data.edges) {
-                setNodes(data.nodes);
+                const normalizedNodes = data.nodes.map(node => {
+                    const { position, ...rest } = node;
+                    const fallbackX = node.x ?? position?.x ?? 0;
+                    const fallbackY = node.y ?? position?.y ?? 0;
+                    return {
+                        ...rest,
+                        x: fallbackX,
+                        y: fallbackY,
+                    };
+                });
+                setNodes(normalizedNodes);
                 setEdges(data.edges);
             } else {
                 throw new Error('Invalid workflow data received from server.');
@@ -693,12 +707,16 @@ export const App = () => {
 
     const runWorkflow = async () => {
         const workflowPayload = {
-            nodes: nodes.map(node => ({
-                id: node.id,
-                type: node.type,
-                position: { x: node.x, y: node.y },
-                data: node.data,
-            })),
+            nodes: nodes.map(node => {
+                const fallbackX = node.x ?? node.position?.x ?? 0;
+                const fallbackY = node.y ?? node.position?.y ?? 0;
+                return {
+                    id: node.id,
+                    type: node.type,
+                    position: { x: fallbackX, y: fallbackY },
+                    data: node.data,
+                };
+            }),
             edges: edges,
         };
 
