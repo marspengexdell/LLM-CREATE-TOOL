@@ -1080,12 +1080,7 @@ def delete_model(model_id: str) -> Response:
 def list_datasets() -> List[Dict[str, Any]]:
     """Return metadata for uploaded datasets."""
 
-codex/update-list_datasets-function-to-return-one-source
-
     return _collect_dataset_metadata()
-
-main
-    return _dataset_index()
 
 
 @app.post("/api/v1/datasets/upload")
