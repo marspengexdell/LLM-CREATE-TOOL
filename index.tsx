@@ -4,9 +4,40 @@ import { createRoot } from 'react-dom/client';
 
 const DEFAULT_ERROR_MESSAGE = 'Request failed, please retry.';
 
-const handleApiError = (error, fallbackMessage = DEFAULT_ERROR_MESSAGE, context = 'API request failed') => {
-    console.error(context, error);
-    alert(fallbackMessage);
+const extractErrorInfoFromPayload = (payload, fallbackMessage = DEFAULT_ERROR_MESSAGE) => {
+    const messageCandidate = payload?.error?.message;
+    const normalizedMessage = typeof messageCandidate === 'string' && messageCandidate.trim().length > 0
+        ? messageCandidate.trim()
+        : fallbackMessage;
+
+    const errorCodeCandidate = payload?.error?.details?.errorCode;
+    const normalizedCode = typeof errorCodeCandidate === 'string' && errorCodeCandidate.trim().length > 0
+        ? errorCodeCandidate.trim()
+        : undefined;
+
+    return { message: normalizedMessage, code: normalizedCode };
+};
+
+const createErrorInfo = (error, fallbackMessage = DEFAULT_ERROR_MESSAGE) => {
+    if (error && typeof error === 'object') {
+        const messageCandidate = 'message' in error ? error.message : undefined;
+        if (typeof messageCandidate === 'string' && messageCandidate.trim().length > 0) {
+            return { message: messageCandidate.trim() };
+        }
+    }
+
+    if (typeof error === 'string' && error.trim().length > 0) {
+        return { message: error.trim() };
+    }
+
+    return { message: fallbackMessage };
+};
+
+const handleApiError = (errorInfo, context = 'API request failed') => {
+    const { message = DEFAULT_ERROR_MESSAGE, code } = errorInfo || {};
+    const displayMessage = code ? `${message} (Code: ${code})` : message;
+    console.error(context, { message: displayMessage, code });
+    alert(displayMessage);
 };
 
 // --- ICONS ---
@@ -83,7 +114,7 @@ codex/add-empty-state-handling-for-various-components
                 const data = await response.json();
                 setModels(data);
             } catch (error) {
-                handleApiError(error, DEFAULT_ERROR_MESSAGE, 'Failed to fetch models');
+                handleApiError(createErrorInfo(error), 'Failed to fetch models');
             } finally {
                 setIsLoading(false);
 main
@@ -152,7 +183,7 @@ const DataHubConfigurator = ({ onSelectDataset }) => {
             const data = await response.json();
             setDatasets(data);
         } catch (error) {
-            handleApiError(error, DEFAULT_ERROR_MESSAGE, 'Failed to fetch datasets');
+            handleApiError(createErrorInfo(error), 'Failed to fetch datasets');
         } finally {
             setIsLoading(false);
         }
@@ -180,7 +211,7 @@ const DataHubConfigurator = ({ onSelectDataset }) => {
             // Refresh dataset list after successful upload
             fetchDatasets();
         } catch (error) {
-             handleApiError(error, DEFAULT_ERROR_MESSAGE, 'Failed to upload dataset file');
+             handleApiError(createErrorInfo(error), 'Failed to upload dataset file');
         }
     };
 
@@ -264,7 +295,7 @@ codex/add-empty-state-handling-for-various-components
                 const data = await response.json();
                 setWorkflows(data);
             } catch (error) {
-                handleApiError(error, DEFAULT_ERROR_MESSAGE, 'Failed to fetch workflows');
+                handleApiError(createErrorInfo(error), 'Failed to fetch workflows');
             } finally {
                 setIsLoading(false);
             }
@@ -667,12 +698,19 @@ export const App = () => {
                 body: JSON.stringify(workflowPayload),
             });
             if (!response.ok) {
-                const error = await response.json();
-                throw new Error(error.detail || 'Failed to save workflow.');
+                let errorInfo = { message: DEFAULT_ERROR_MESSAGE };
+                try {
+                    const payload = await response.json();
+                    errorInfo = extractErrorInfoFromPayload(payload);
+                } catch (parseError) {
+                    console.warn('Failed to parse save workflow error payload', parseError);
+                }
+                handleApiError(errorInfo, 'Failed to save workflow');
+                return;
             }
             alert('Workflow saved successfully!');
         } catch (error) {
-            handleApiError(error, DEFAULT_ERROR_MESSAGE, 'Failed to save workflow');
+            handleApiError(createErrorInfo(error), 'Failed to save workflow');
         }
     };
 
@@ -680,8 +718,15 @@ export const App = () => {
         try {
             const response = await fetch(`/api/v1/workflows/${workflowId}`);
             if (!response.ok) {
-                const error = await response.json();
-                throw new Error(error.detail || 'Failed to load workflow.');
+                let errorInfo = { message: DEFAULT_ERROR_MESSAGE };
+                try {
+                    const payload = await response.json();
+                    errorInfo = extractErrorInfoFromPayload(payload);
+                } catch (parseError) {
+                    console.warn('Failed to parse load workflow error payload', parseError);
+                }
+                handleApiError(errorInfo, 'Failed to load workflow');
+                return;
             }
             const data = await response.json();
             if (data.nodes && data.edges) {
@@ -701,7 +746,7 @@ export const App = () => {
                 throw new Error('Invalid workflow data received from server.');
             }
         } catch (error) {
-            handleApiError(error, DEFAULT_ERROR_MESSAGE, 'Failed to load workflow');
+            handleApiError(createErrorInfo(error), 'Failed to load workflow');
         }
     };
 
@@ -733,8 +778,17 @@ export const App = () => {
             });
 
             if (!response.ok) {
-                const errorResult = await response.json();
-                throw new Error(errorResult.detail || 'Workflow execution failed');
+                let errorInfo = { message: DEFAULT_ERROR_MESSAGE };
+                try {
+                    const payload = await response.json();
+                    errorInfo = extractErrorInfoFromPayload(payload);
+                } catch (parseError) {
+                    console.warn('Failed to parse run workflow error payload', parseError);
+                }
+                handleApiError(errorInfo, 'Failed to run workflow');
+                setNodes(prev => prev.map(n => ({...n, status: 'idle'})));
+                setLastRunId(null);
+                return;
             }
 
             const result = await response.json();
@@ -748,7 +802,7 @@ export const App = () => {
             }
 
         } catch (error) {
-            handleApiError(error, DEFAULT_ERROR_MESSAGE, 'Failed to run workflow');
+            handleApiError(createErrorInfo(error), 'Failed to run workflow');
             // Revert status to idle on failure
             setNodes(prev => prev.map(n => ({...n, status: 'idle'})));
             setLastRunId(null);
