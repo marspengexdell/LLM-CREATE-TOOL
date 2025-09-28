@@ -1,1 +1,20 @@
-[]
+[
+  {
+    "name": "Model publish",
+    "source": "training-run",
+    "description": null,
+    "quantization": null,
+    "metadata": {
+      "quantizedModel": {
+        "artifactPath": "runs/test-run-893820e4/quantize/model-int4.gguf",
+        "quantizedModelPath": "runs/test-run-893820e4/quantize",
+        "dtype": "int4",
+        "source": null,
+        "quantizationScheme": "nf4",
+        "quantizedAt": 1759048190
+      }
+    },
+    "id": "3706e010-d83d-43ac-8385-c2a0b8742c55",
+    "registeredAt": "2025-09-28T08:29:50Z"
+  }
+]

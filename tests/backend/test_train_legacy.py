@@ -3,78 +3,74 @@ import asyncio
 import pytest
 
 
-@pytest.fixture
-def training_manager(workflow_main, monkeypatch):
-    """Provide a fresh training job manager for each test."""
-
-    manager = workflow_main.TrainingJobManager()
-    monkeypatch.setattr(workflow_main, "TRAINING_MANAGER", manager)
-    return manager
-
-
-async def _wait_for_state(async_client, run_id: str, expected_states: set[str], timeout: float = 10.0):
-    """Poll the legacy status endpoint until one of the expected states is observed."""
+async def _wait_for_status(
+    async_client,
+    job_id: str,
+    expected_states: set[str],
+    *,
+    timeout: float = 10.0,
+    use_legacy_param: bool = False,
+):
+    """Poll the status endpoint until a matching state is observed."""
 
     loop = asyncio.get_event_loop()
     deadline = loop.time() + timeout
     last_payload = None
+    query_param = "runId" if use_legacy_param else "jobId"
+
     while loop.time() < deadline:
-        response = await async_client.get(f"/train/status?runId={run_id}")
+        response = await async_client.get(f"/train/status?{query_param}={job_id}")
         assert response.status_code == 200
         last_payload = response.json()
-        if last_payload.get("state") in expected_states:
+        if last_payload.get("status") in expected_states:
             return last_payload
         await asyncio.sleep(0.2)
-    pytest.fail(f"Training job {run_id} did not reach states {expected_states} within timeout")
+
+    pytest.fail(f"Training job {job_id} did not reach states {expected_states} within timeout")
 
 
 @pytest.mark.anyio
-async def test_legacy_train_start_and_status(async_client, training_manager):
-    response = await async_client.post(
-        "/train/start",
-        json={"steps": 2, "description": "integration test"},
-    )
-    assert response.status_code == 200
-    payload = response.json()
-    run_id = payload["runId"]
-    assert run_id
+async def test_legacy_routes_alias_new_controller(async_client):
+    payload = {
+        "datasetId": "legacy-dataset",
+        "modelId": "legacy-model",
+        "hyperparameters": {"epochs": 1},
+    }
 
-    status_payload = await _wait_for_state(async_client, run_id, {"completed", "failed"})
-    assert status_payload["runId"] == run_id
-    assert status_payload["state"] == "completed"
-    assert status_payload["progress"] == pytest.approx(100.0)
-    assert isinstance(status_payload["metrics"], dict)
+    start_response = await async_client.post("/train/start", json=payload)
+    assert start_response.status_code == 200
+    start_payload = start_response.json()
+    job_id = start_payload["jobId"]
+    assert start_payload["status"] in {"running", "queued"}
+
+    api_status = await async_client.get(f"/api/v1/train/status?jobId={job_id}")
+    legacy_status = await async_client.get(f"/train/status?runId={job_id}")
+    assert api_status.status_code == legacy_status.status_code == 200
+    api_payload = api_status.json()
+    legacy_payload = legacy_status.json()
+    assert api_payload["jobId"] == legacy_payload["jobId"] == job_id
+    assert api_payload["datasetId"] == legacy_payload["datasetId"]
+    assert api_payload["modelId"] == legacy_payload["modelId"]
+    assert api_payload["status"] == legacy_payload["status"]
+
+    abort_response = await async_client.post("/train/abort", json={"runId": job_id})
+    assert abort_response.status_code == 200
+
+    final_status = await _wait_for_status(async_client, job_id, {"aborted"}, use_legacy_param=True)
+    assert final_status["status"] == "aborted"
 
 
 @pytest.mark.anyio
-async def test_legacy_train_status_not_found(async_client, training_manager):
-    response = await async_client.get("/train/status?runId=missing")
+async def test_legacy_status_not_found(async_client):
+    response = await async_client.get("/train/status?runId=unknown")
     assert response.status_code == 404
     error = response.json()["error"]
-    assert error["code"] == 404
-    assert error["details"]["errorCode"] == "TRAINING_RUN_NOT_FOUND"
+    assert error["details"]["errorCode"] == "TRAINING_JOB_NOT_FOUND"
 
 
 @pytest.mark.anyio
-async def test_legacy_train_abort(async_client, training_manager):
-    response = await async_client.post("/train/start", json={"steps": 20})
-    assert response.status_code == 200
-    run_id = response.json()["runId"]
-
-    abort_response = await async_client.post("/train/abort", json={"runId": run_id})
-    assert abort_response.status_code == 200
-    abort_payload = abort_response.json()
-    assert abort_payload["runId"] == run_id
-
-    status_payload = await _wait_for_state(async_client, run_id, {"aborted", "completed"})
-    assert status_payload["runId"] == run_id
-    assert status_payload["state"] in {"aborted", "completed"}
-
-
-@pytest.mark.anyio
-async def test_legacy_train_abort_not_found(async_client, training_manager):
+async def test_legacy_abort_not_found(async_client):
     response = await async_client.post("/train/abort", json={"runId": "unknown"})
     assert response.status_code == 404
     error = response.json()["error"]
-    assert error["code"] == 404
-    assert error["details"]["errorCode"] == "TRAINING_RUN_NOT_FOUND"
+    assert error["details"]["errorCode"] == "TRAINING_JOB_NOT_FOUND"

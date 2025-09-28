@@ -49,15 +49,8 @@ def _load_main_module() -> ModuleType:
         "TrainingStartRequest",
         "TrainingStatusResponse",
         "TrainingAbortRequest",
-        "TrainStartRequest",
-        "TrainStatusResponse",
-        "TrainAbortRequest",
         "ModelRegistryEntry",
         "ModelRegistryCreateRequest",
-        "TrainingJobStartRequest",
-        "TrainingJobStartResponse",
-        "TrainingJobStatusResponse",
-        "TrainingJobAbortRequest",
     ):
         model = getattr(module, model_name, None)
         rebuild = getattr(model, "model_rebuild", None)
@@ -103,6 +96,11 @@ def storage_paths(workflow_main: ModuleType, tmp_path: Path, monkeypatch: pytest
     monkeypatch.setattr(workflow_main, "DATASETS_INDEX_PATH", datasets_dir / "index.json")
     monkeypatch.setattr(workflow_main, "MODELS_INDEX_PATH", models_dir / "index.json")
     monkeypatch.setattr(workflow_main, "TRAINING_STATE_PATH", storage_dir / "training_state.json")
+
+    training_controller = workflow_main.TrainingController(
+        workflow_main.TRAINING_STATE_PATH, workflow_main.LOGGER
+    )
+    monkeypatch.setattr(workflow_main, "TRAINING_CONTROLLER", training_controller)
 
     return {
         "base": base_dir,
