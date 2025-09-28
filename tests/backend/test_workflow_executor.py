@@ -119,6 +119,49 @@ async def test_run_workflow_reports_node_failure(async_client):
     assert "[Gemini placeholder]" in report_data.get("report", "")
 
 
+@pytest.mark.anyio("asyncio")
+async def test_registry_publish_registers_model(async_client):
+    workflow = {
+        "name": "Registry publish",
+        "description": "register quantized model",
+        "nodes": [
+            {
+                "id": "quantize",
+                "type": "quantize_model",
+                "position": {"x": 0, "y": 0},
+                "data": {"bits": 4, "scheme": "nf4"},
+            },
+            {
+                "id": "publish",
+                "type": "registry_publish",
+                "position": {"x": 200, "y": 0},
+                "data": {"modelName": "Quant Demo", "description": "From workflow"},
+            },
+        ],
+        "edges": [
+            {
+                "id": "link",
+                "fromNode": "quantize",
+                "fromPort": "model",
+                "toNode": "publish",
+                "toPort": "model",
+            }
+        ],
+    }
+
+    run_response = await async_client.post("/api/v1/workflow/run", json=workflow)
+    assert run_response.status_code == 200
+    payload = run_response.json()
+    publish_state = next(node for node in payload["nodes"] if node["id"] == "publish")
+    registry_entry = publish_state["data"].get("registryEntry")
+    assert registry_entry is not None
+    assert registry_entry["name"] == "Quant Demo"
+    assert registry_entry["quantization"] == "int4"
+
+    models_response = await async_client.get("/api/v1/models")
+    assert models_response.status_code == 200
+    models = models_response.json()
+    assert any(model["id"] == registry_entry["id"] for model in models)
 def test_generate_report_placeholder_without_gemini(workflow_main):
     types = _load_executor_types(workflow_main)
     Position = types["Position"]

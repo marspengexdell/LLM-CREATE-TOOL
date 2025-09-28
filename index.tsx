@@ -177,7 +177,23 @@ main
         fetchModels();
     }, [fetchModels]);
 
-    const filteredModels = models.filter(m => m.name.toLowerCase().includes(searchTerm.toLowerCase()));
+    const searchQuery = searchTerm.trim().toLowerCase();
+    const filteredModels = models.filter(model => {
+        if (!searchQuery) return true;
+        const fields = [model?.name, model?.source, model?.description];
+        return fields
+            .filter(value => typeof value === 'string')
+            .some(value => value.toLowerCase().includes(searchQuery));
+    });
+
+    const formatRegisteredAt = (value) => {
+        if (!value) return null;
+        const parsed = new Date(value);
+        if (Number.isNaN(parsed.getTime())) {
+            return value;
+        }
+        return parsed.toLocaleString();
+    };
 
     return (
         <div className="configurator-container">
@@ -200,15 +216,34 @@ main
                         </div>
                     </div>
                 ) : (
-                    filteredModels.map(model => (
+                    filteredModels.map(model => {
+                        const registeredLabel = formatRegisteredAt(model.registeredAt);
+                        return (
                         <div key={model.id} className="model-item item-card">
                             <div className="item-info">
                                 <h4>{model.name}</h4>
-                                <p>{model.description}</p>
+                                {model.description ? <p>{model.description}</p> : null}
+                                <dl className="model-meta">
+                                    <div>
+                                        <dt>Source</dt>
+                                        <dd>{model.source || '—'}</dd>
+                                    </div>
+                                    <div>
+                                        <dt>Quantization</dt>
+                                        <dd>{model.quantization || model.metadata?.quantizationScheme || '—'}</dd>
+                                    </div>
+                                    {registeredLabel ? (
+                                        <div>
+                                            <dt>Registered</dt>
+                                            <dd>{registeredLabel}</dd>
+                                        </div>
+                                    ) : null}
+                                </dl>
                             </div>
                             <button onClick={() => onSelectModel(model.id)} className="select-item-btn">Select</button>
                         </div>
-                    ))
+                    );
+                    })
                 )}
             </div>
         </div>
