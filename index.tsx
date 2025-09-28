@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client';
 
 const DEFAULT_ERROR_MESSAGE = 'Request failed, please retry.';
 
+codex/add-lightweight-toast-mechanism
 const TOAST_DURATION = 5000;
 
 const ToastContext = React.createContext(() => {});
@@ -43,6 +44,42 @@ const handleApiError = (enqueueToast, error, fallbackMessage = DEFAULT_ERROR_MES
         title: 'We hit a snag',
         description: fallbackMessage,
     });
+
+const extractErrorInfoFromPayload = (payload, fallbackMessage = DEFAULT_ERROR_MESSAGE) => {
+    const messageCandidate = payload?.error?.message;
+    const normalizedMessage = typeof messageCandidate === 'string' && messageCandidate.trim().length > 0
+        ? messageCandidate.trim()
+        : fallbackMessage;
+
+    const errorCodeCandidate = payload?.error?.details?.errorCode;
+    const normalizedCode = typeof errorCodeCandidate === 'string' && errorCodeCandidate.trim().length > 0
+        ? errorCodeCandidate.trim()
+        : undefined;
+
+    return { message: normalizedMessage, code: normalizedCode };
+};
+
+const createErrorInfo = (error, fallbackMessage = DEFAULT_ERROR_MESSAGE) => {
+    if (error && typeof error === 'object') {
+        const messageCandidate = 'message' in error ? error.message : undefined;
+        if (typeof messageCandidate === 'string' && messageCandidate.trim().length > 0) {
+            return { message: messageCandidate.trim() };
+        }
+    }
+
+    if (typeof error === 'string' && error.trim().length > 0) {
+        return { message: error.trim() };
+    }
+
+    return { message: fallbackMessage };
+};
+
+const handleApiError = (errorInfo, context = 'API request failed') => {
+    const { message = DEFAULT_ERROR_MESSAGE, code } = errorInfo || {};
+    const displayMessage = code ? `${message} (Code: ${code})` : message;
+    console.error(context, { message: displayMessage, code });
+    alert(displayMessage);
+main
 };
 
 // --- ICONS ---
@@ -107,6 +144,25 @@ const ModelHubConfigurator = ({ onSelectModel }) => {
             const response = await fetch('/api/v1/models');
             if (!response.ok) {
                 throw new Error('Network response was not ok');
+codex/add-lightweight-toast-mechanism
+
+
+    useEffect(() => {
+        const fetchModels = async () => {
+            try {
+                setIsLoading(true);
+                const response = await fetch('/api/v1/models');
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
+                }
+                const data = await response.json();
+                setModels(data);
+            } catch (error) {
+                handleApiError(createErrorInfo(error), 'Failed to fetch models');
+            } finally {
+                setIsLoading(false);
+main
+main
             }
             const data = await response.json();
             setModels(data);
@@ -172,7 +228,11 @@ const DataHubConfigurator = ({ onSelectDataset }) => {
             const data = await response.json();
             setDatasets(data);
         } catch (error) {
+codex/add-lightweight-toast-mechanism
             handleApiError(enqueueToast, error, DEFAULT_ERROR_MESSAGE, 'Failed to fetch datasets');
+
+            handleApiError(createErrorInfo(error), 'Failed to fetch datasets');
+main
         } finally {
             setIsLoading(false);
         }
@@ -200,7 +260,11 @@ const DataHubConfigurator = ({ onSelectDataset }) => {
             // Refresh dataset list after successful upload
             fetchDatasets();
         } catch (error) {
+codex/add-lightweight-toast-mechanism
             handleApiError(enqueueToast, error, DEFAULT_ERROR_MESSAGE, 'Failed to upload dataset file');
+
+             handleApiError(createErrorInfo(error), 'Failed to upload dataset file');
+main
         }
     };
 
@@ -274,6 +338,25 @@ const LoadWorkflowModal = ({ onLoadWorkflow, closeModal, onCreateNewWorkflow }) 
     }, [enqueueToast]);
 
     useEffect(() => {
+codex/add-lightweight-toast-mechanism
+
+codex/add-empty-state-handling-for-various-components
+
+        const fetchWorkflows = async () => {
+            try {
+                setIsLoading(true);
+                const response = await fetch('/api/v1/workflows');
+                if (!response.ok) throw new Error('Failed to fetch workflows');
+                const data = await response.json();
+                setWorkflows(data);
+            } catch (error) {
+                handleApiError(createErrorInfo(error), 'Failed to fetch workflows');
+            } finally {
+                setIsLoading(false);
+            }
+        };
+main
+main
         fetchWorkflows();
     }, [fetchWorkflows]);
 
@@ -703,8 +786,15 @@ export const App = () => {
                 body: JSON.stringify(workflowPayload),
             });
             if (!response.ok) {
-                const error = await response.json();
-                throw new Error(error.detail || 'Failed to save workflow.');
+                let errorInfo = { message: DEFAULT_ERROR_MESSAGE };
+                try {
+                    const payload = await response.json();
+                    errorInfo = extractErrorInfoFromPayload(payload);
+                } catch (parseError) {
+                    console.warn('Failed to parse save workflow error payload', parseError);
+                }
+                handleApiError(errorInfo, 'Failed to save workflow');
+                return;
             }
             enqueueToast({
                 tone: 'success',
@@ -712,7 +802,11 @@ export const App = () => {
                 description: 'Workflow saved successfully.',
             });
         } catch (error) {
+codex/add-lightweight-toast-mechanism
             handleApiError(enqueueToast, error, DEFAULT_ERROR_MESSAGE, 'Failed to save workflow');
+
+            handleApiError(createErrorInfo(error), 'Failed to save workflow');
+main
         }
     };
 
@@ -720,8 +814,15 @@ export const App = () => {
         try {
             const response = await fetch(`/api/v1/workflows/${workflowId}`);
             if (!response.ok) {
-                const error = await response.json();
-                throw new Error(error.detail || 'Failed to load workflow.');
+                let errorInfo = { message: DEFAULT_ERROR_MESSAGE };
+                try {
+                    const payload = await response.json();
+                    errorInfo = extractErrorInfoFromPayload(payload);
+                } catch (parseError) {
+                    console.warn('Failed to parse load workflow error payload', parseError);
+                }
+                handleApiError(errorInfo, 'Failed to load workflow');
+                return;
             }
             const data = await response.json();
             if (data.nodes && data.edges) {
@@ -741,7 +842,11 @@ export const App = () => {
                 throw new Error('Invalid workflow data received from server.');
             }
         } catch (error) {
+codex/add-lightweight-toast-mechanism
             handleApiError(enqueueToast, error, DEFAULT_ERROR_MESSAGE, 'Failed to load workflow');
+
+            handleApiError(createErrorInfo(error), 'Failed to load workflow');
+main
         }
     };
 
@@ -773,8 +878,17 @@ export const App = () => {
             });
 
             if (!response.ok) {
-                const errorResult = await response.json();
-                throw new Error(errorResult.detail || 'Workflow execution failed');
+                let errorInfo = { message: DEFAULT_ERROR_MESSAGE };
+                try {
+                    const payload = await response.json();
+                    errorInfo = extractErrorInfoFromPayload(payload);
+                } catch (parseError) {
+                    console.warn('Failed to parse run workflow error payload', parseError);
+                }
+                handleApiError(errorInfo, 'Failed to run workflow');
+                setNodes(prev => prev.map(n => ({...n, status: 'idle'})));
+                setLastRunId(null);
+                return;
             }
 
             const result = await response.json();
@@ -788,7 +902,11 @@ export const App = () => {
             }
 
         } catch (error) {
+codex/add-lightweight-toast-mechanism
             handleApiError(enqueueToast, error, DEFAULT_ERROR_MESSAGE, 'Failed to run workflow');
+
+            handleApiError(createErrorInfo(error), 'Failed to run workflow');
+main
             // Revert status to idle on failure
             setNodes(prev => prev.map(n => ({...n, status: 'idle'})));
             setLastRunId(null);
