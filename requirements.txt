@@ -5,3 +5,8 @@ python-multipart
 google-generativeai
 httpx
 pytest
+torch
+transformers
+peft
+bitsandbytes
+lm_eval
