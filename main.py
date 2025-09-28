@@ -74,7 +74,7 @@ codex/rewrite-backend-using-fastapi-and-implement-routes-k68a2h
 DATASETS_INDEX_PATH = DATASETS_DIR / "index.json"
 
 main
-MAX_UPLOAD_SIZE_BYTES = 20 * 1024 * 1024
+MAX_UPLOAD_SIZE_BYTES = 200 * 1024 * 1024
 PREVIEW_LIMIT_BYTES = 1 * 1024 * 1024
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
@@ -970,6 +970,18 @@ TRAINING_CONTROLLER = TrainingController(TRAINING_STATE_PATH, LOGGER)
 # ---------------------------------------------------------------------------
 
 
+@app.get("/api/v1/metadata")
+def get_backend_metadata() -> Dict[str, Any]:
+    """Expose backend metadata for the front-end."""
+
+    return {
+        "datasetUpload": {
+            "maxBytes": MAX_UPLOAD_SIZE_BYTES,
+            "maxReadable": f"{MAX_UPLOAD_SIZE_BYTES // (1024 * 1024)} MB",
+        }
+    }
+
+
 @app.get("/api/v1/models")
 def list_models() -> List[Dict[str, str]]:
     """Return a static list of available models."""
@@ -1037,7 +1049,7 @@ async def upload_dataset(file: UploadFile = File(...)) -> Dict[str, Any]:
         raise HTTPException(
             status_code=400,
             detail=_error_detail(
-                "File exceeds maximum allowed size of 20MB.",
+                "File exceeds maximum allowed size of 200 MB.",
                 error_code="DATASET_FILE_TOO_LARGE",
                 details={"maxBytes": MAX_UPLOAD_SIZE_BYTES},
             ),

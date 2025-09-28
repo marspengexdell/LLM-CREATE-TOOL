@@ -220,6 +220,7 @@ const DataHubConfigurator = ({ onSelectDataset }) => {
     const [datasets, setDatasets] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
     const fileInputRef = useRef(null);
+    const [maxUploadBytes, setMaxUploadBytes] = useState(null);
 
     const fetchDatasets = useCallback(async () => {
         try {
@@ -242,13 +243,39 @@ main
         fetchDatasets();
     }, [fetchDatasets]);
 
+    useEffect(() => {
+        const fetchMetadata = async () => {
+            try {
+                const response = await fetch('/api/v1/metadata');
+                if (!response.ok) {
+                    throw new Error('Failed to fetch metadata');
+                }
+                const data = await response.json();
+                const limit = data?.datasetUpload?.maxBytes;
+                if (typeof limit === 'number' && Number.isFinite(limit) && limit > 0) {
+                    setMaxUploadBytes(limit);
+                }
+            } catch (error) {
+                console.warn('Failed to fetch backend metadata', error);
+            }
+        };
+
+        fetchMetadata();
+    }, []);
+
     const handleFileUpload = async (e) => {
         const file = e.target.files[0];
         if (!file) return;
 
+        if (typeof maxUploadBytes === 'number' && file.size > maxUploadBytes) {
+            const maxSizeMb = Math.ceil(maxUploadBytes / (1024 * 1024));
+            alert(`File exceeds maximum allowed size of ${maxSizeMb} MB.`);
+            return;
+        }
+
         const formData = new FormData();
         formData.append('file', file);
-        
+
         try {
             const response = await fetch('/api/v1/datasets/upload', {
                 method: 'POST',
@@ -276,6 +303,9 @@ main
         <div className="configurator-container">
             <div className="upload-area">
                 <h4>Upload New Dataset</h4>
+                {typeof maxUploadBytes === 'number' && (
+                    <p className="upload-hint">Maximum file size: {Math.ceil(maxUploadBytes / (1024 * 1024))} MB</p>
+                )}
                 <label className="upload-btn-large" onClick={handleUploadAction}>
                     Click to select or drag and drop a file
                     <input
