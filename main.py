@@ -47,6 +47,7 @@ from fastapi import Body, FastAPI, File, HTTPException, Request, Response, Uploa
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from src.training import PipelineContext, PipelineError, TrainingPipeline
 
 try:  # pragma: no cover - graceful degradation if dependency missing
     import google.generativeai as genai  # type: ignore
@@ -594,6 +595,22 @@ class TrainStatusResponse(BaseModel):
 
 class TrainAbortRequest(BaseModel):
     runId: str
+
+
+class TrainingJobStartRequest(TrainStartRequest):
+    """Request payload for the legacy /train/start endpoint."""
+
+
+class TrainingJobStartResponse(TrainStartResponse):
+    """Response payload for the legacy /train/start endpoint."""
+
+
+class TrainingJobStatusResponse(TrainStatusResponse):
+    """Response payload for the legacy /train/status endpoint."""
+
+
+class TrainingJobAbortRequest(TrainAbortRequest):
+    """Request payload for the legacy /train/abort endpoint."""
 main
 
 
@@ -1272,6 +1289,51 @@ def save_workflow(definition: WorkflowDefinition) -> Dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
+@app.post("/train/start", response_model=TrainingJobStartResponse)
+def legacy_start_training_job(
+    payload: TrainingJobStartRequest = Body(default=TrainingJobStartRequest()),
+) -> TrainingJobStartResponse:
+    """Start a background training job using the legacy /train endpoint."""
+
+    run_id = TRAINING_MANAGER.start_job(steps=payload.steps, description=payload.description)
+    LOGGER.info("Started training run %s", run_id)
+    return TrainingJobStartResponse(runId=run_id)
+
+
+@app.get("/train/status", response_model=TrainingJobStatusResponse)
+def legacy_get_training_status(run_id: str = Query(..., alias="runId")) -> TrainingJobStatusResponse:
+    """Return the status snapshot for the requested training job."""
+
+    snapshot = TRAINING_MANAGER.get_snapshot(run_id)
+    if snapshot is None:
+        raise HTTPException(
+            status_code=404,
+            detail=_error_detail(
+                "Training run not found.",
+                error_code="TRAINING_RUN_NOT_FOUND",
+                details={"runId": run_id},
+            ),
+        )
+    return TrainingJobStatusResponse(**snapshot)
+
+
+@app.post("/train/abort", response_model=TrainingJobStatusResponse)
+def legacy_abort_training_job(payload: TrainingJobAbortRequest) -> TrainingJobStatusResponse:
+    """Abort a running training job and return its latest snapshot."""
+
+    snapshot = TRAINING_MANAGER.abort_job(payload.runId)
+    if snapshot is None:
+        raise HTTPException(
+            status_code=404,
+            detail=_error_detail(
+                "Training run not found.",
+                error_code="TRAINING_RUN_NOT_FOUND",
+                details={"runId": payload.runId},
+            ),
+        )
+    return TrainingJobStatusResponse(**snapshot)
+
+
 @app.post("/api/v1/train/start", response_model=TrainingStatusResponse)
 def start_training_job(request: TrainingStartRequest) -> TrainingStatusResponse:
     """Start a new training job for a dataset/model pair."""
@@ -1329,6 +1391,9 @@ class WorkflowExecutor:
         self.gemini_service = gemini_service
         self.logger = logger or LOGGER
         self.run_id = run_id or str(uuid4())
+        self.pipeline = TrainingPipeline(
+            PipelineContext(run_id=self.run_id, storage_dir=STORAGE_DIR, logger=self.logger)
+        )
 
     def _build_graph(self, edges: List[WorkflowEdge]) -> None:
         indegree = defaultdict(int)
@@ -1556,6 +1621,31 @@ main
                 decision = bool(input_value)
             data["decision"] = decision
             return {"true": input_value if decision else None, "false": None if decision else input_value}, data
+
+        pipeline_handlers = {
+            "dataset_build": self.pipeline.dataset_build,
+            "dataset_builder": self.pipeline.dataset_build,
+            "dataset_prepare": self.pipeline.dataset_build,
+            "tokenize": self.pipeline.tokenize,
+            "tokenizer": self.pipeline.tokenize,
+            "train_sft_lora": self.pipeline.train_sft_lora,
+            "train_lora": self.pipeline.train_sft_lora,
+            "merge_lora": self.pipeline.merge_lora,
+            "lora_merge": self.pipeline.merge_lora,
+            "quantize_export": self.pipeline.quantize_export,
+            "quantize": self.pipeline.quantize_export,
+            "eval_lmeval": self.pipeline.eval_lmeval,
+            "evaluation_lmeval": self.pipeline.eval_lmeval,
+            "registry_publish": self.pipeline.registry_publish,
+        }
+
+        handler = pipeline_handlers.get(node_type_normalized)
+        if handler:
+            try:
+                outputs, updated = handler(dict(data), inputs)
+            except PipelineError as exc:
+                raise RuntimeError(str(exc)) from exc
+            return outputs, updated
 
         if node.type in {"image_input", "text_input", "data_hub", "model_hub"}:
             return {"out": data}, data
@@ -1903,6 +1993,43 @@ def run_workflow(definition: WorkflowDefinition) -> WorkflowRunResponse:
 # ---------------------------------------------------------------------------
 # Training endpoints
 # ---------------------------------------------------------------------------
+
+
+@app.post("/train/start", response_model=TrainStartResponse)
+def start_training_job_v2(payload: TrainStartRequest = Body(default=TrainStartRequest())) -> TrainStartResponse:
+    run_id = TRAINING_MANAGER.start_job(steps=payload.steps, description=payload.description)
+    LOGGER.info("Started training run %s", run_id)
+    return TrainStartResponse(runId=run_id)
+
+
+@app.get("/train/status", response_model=TrainStatusResponse)
+def get_training_status_v2(run_id: str = Query(..., alias="runId")) -> TrainStatusResponse:
+    snapshot = TRAINING_MANAGER.get_snapshot(run_id)
+    if snapshot is None:
+        raise HTTPException(
+            status_code=404,
+            detail=_error_detail(
+                "Training run not found.",
+                error_code="TRAINING_RUN_NOT_FOUND",
+                details={"runId": run_id},
+            ),
+        )
+    return TrainStatusResponse(**snapshot)
+
+
+@app.post("/train/abort", response_model=TrainStatusResponse)
+def abort_training_job_v2(payload: TrainAbortRequest) -> TrainStatusResponse:
+    snapshot = TRAINING_MANAGER.abort_job(payload.runId)
+    if snapshot is None:
+        raise HTTPException(
+            status_code=404,
+            detail=_error_detail(
+                "Training run not found.",
+                error_code="TRAINING_RUN_NOT_FOUND",
+                details={"runId": payload.runId},
+            ),
+        )
+    return TrainStatusResponse(**snapshot)
 
 
 @app.post("/api/v1/train/start", response_model=TrainStartResponse)

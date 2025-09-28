@@ -52,8 +52,15 @@ def _load_main_module() -> ModuleType:
         "TrainStartRequest",
         "TrainStatusResponse",
         "TrainAbortRequest",
+codex/add-model-registration-storage-and-apis
         "ModelRegistryEntry",
         "ModelRegistryCreateRequest",
+
+        "TrainingJobStartRequest",
+        "TrainingJobStartResponse",
+        "TrainingJobStatusResponse",
+        "TrainingJobAbortRequest",
+main
     ):
         model = getattr(module, model_name, None)
         rebuild = getattr(model, "model_rebuild", None)

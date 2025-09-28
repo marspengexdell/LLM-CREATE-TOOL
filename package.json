@@ -6,14 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-codex/create-ci-workflow-with-caching-and-docker-build
     "lint": "tsc --noEmit",
-    "test": "vite build --mode test",
+    "test": "vitest",
     "preview": "vite preview"
-
-    "preview": "vite preview",
-    "test": "vitest"
-main
   },
   "dependencies": {
     "react": "^19.1.1",
