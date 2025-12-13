@@ -1,8 +1,23 @@
+# 可换成 node:20-alpine（更新 LTS）
 FROM node:18-alpine
+
 WORKDIR /app
-COPY package.json .
-COPY package-lock.json .
-RUN npm install
+
+# 先复制清单，利用缓存
+COPY package.json package-lock.json ./
+
+# 安装依赖（含 devDependencies），lock 不匹配时回退到 npm install
+RUN npm config set fund false && npm config set audit false \
+ && (npm ci || npm install)
+
+# 兜底：全局装一个 vite，避免脚本里找不到
+RUN npm i -g vite@5
+
+# 再复制源码
 COPY . .
+
+ENV VITE_DEV_SERVER_HOST=0.0.0.0
 EXPOSE 3000
-CMD ["npm", "run", "dev"]
+
+# 优先跑项目里的 dev 脚本；若仍无 vite，则用全局 vite 兜底
+CMD ["sh","-lc","npm run dev -- --host 0.0.0.0 --port 3000 || npx vite --host 0.0.0.0 --port 3000"]

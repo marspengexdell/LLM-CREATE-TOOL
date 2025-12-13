@@ -1,0 +1,13 @@
+cd E:\LLM-CREATE-TOOL
+(
+echo version: '3.8'
+echo services:
+echo ^  backend:
+echo ^    image: llm-tool-backend:dev
+echo ^    container_name: workflow_backend
+echo ^    ports:
+echo ^      - "8000:8000"
+echo ^    volumes:
+echo ^      - ./storage:/app/storage
+echo ^      - ./logs:/app/logs
+) > docker-compose.dev.yml
